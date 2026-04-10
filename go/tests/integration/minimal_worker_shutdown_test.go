@@ -35,6 +35,7 @@ func minimalWorkerBinary(t *testing.T) string {
 		return candidate
 	}
 	t.Skipf("minimal-worker not found at %s — run: (cd ../../../rust && cargo build -p minimal-worker), or set FORGE_MINIMAL_WORKER", candidate)
+	return "" // unreachable when Skipf stops the test; satisfies missing-return analysis
 }
 
 func TestMinimalWorker_ShutdownWithDelay(t *testing.T) {
