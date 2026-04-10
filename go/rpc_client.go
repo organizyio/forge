@@ -70,7 +70,7 @@ func (c *Client) Ping(ctx context.Context) (*WireResponse, error) {
 }
 
 // CancelJob invokes the control-plane cancel_job RPC. It returns whether the
-// worker reported the job as cancelled (false can mean JOB_NOT_FOUND).
+// worker reported the job as canceled (false can mean JOB_NOT_FOUND).
 func (c *Client) CancelJob(ctx context.Context, jobID string) (bool, error) {
 	resp, err := c.Conn().Call(ctx, "cancel_job", map[string]string{"job_id": jobID})
 	if err != nil {
@@ -86,12 +86,12 @@ func (c *Client) CancelJob(ctx context.Context, jobID string) (bool, error) {
 		return false, nil
 	}
 	var out struct {
-		Cancelled bool `json:"cancelled"`
+		Canceled bool `json:"cancelled"`
 	}
 	if err := json.Unmarshal(*resp.Payload, &out); err != nil {
 		return false, fmt.Errorf("decode cancel_job payload: %w", err)
 	}
-	return out.Cancelled, nil
+	return out.Canceled, nil
 }
 
 // Shutdown asks the worker to shut down using the worker's default delay

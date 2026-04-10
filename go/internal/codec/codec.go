@@ -10,6 +10,7 @@ import (
 // Format selects the on-the-wire encoding.
 type Format int
 
+// On-the-wire encoding variants for [Marshal] and [Unmarshal].
 const (
 	FormatMsgpack Format = iota
 	FormatJSON

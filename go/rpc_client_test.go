@@ -140,7 +140,7 @@ func TestClient_JobStatusFunc_Override(t *testing.T) {
 
 func TestClient_CancelJob_Success(t *testing.T) {
 	t.Parallel()
-	raw := json.RawMessage([]byte(`{"cancelled":true,"job_id":"j1"}`))
+	raw := json.RawMessage([]byte(`{"cancelled":true,"job_id":"j1"}`)) //nolint:misspell // JSON key per protocol
 	client := forge.NewClient(fakeCaller{
 		fn: func(_ context.Context, method string, params any) (*forge.WireResponse, error) {
 			if method != "cancel_job" {
