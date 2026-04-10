@@ -96,9 +96,12 @@ func TestMinimalWorker_ShutdownWithDelay(t *testing.T) {
 	case <-done:
 		require.NoError(t, waitErr, "worker exit")
 		exitDelay := time.Since(rpcDone)
-		require.GreaterOrEqual(t, exitDelay, 1500*time.Millisecond,
-			"worker exited too soon after shutdown response (want ~2s delay_ms)")
-		require.Less(t, exitDelay, 4*time.Second, "worker took too long to exit")
+		if exitDelay < 1500*time.Millisecond {
+			t.Fatalf("worker exited too soon after shutdown response (want ~2s delay_ms): %s", exitDelay)
+		}
+		if exitDelay >= 4*time.Second {
+			t.Fatalf("worker took too long to exit: %s", exitDelay)
+		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("timeout waiting for worker process to exit")
 	}

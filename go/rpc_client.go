@@ -86,7 +86,7 @@ func (c *Client) CancelJob(ctx context.Context, jobID string) (bool, error) {
 		return false, nil
 	}
 	var out struct {
-		Canceled bool `json:"cancelled"`
+		Canceled bool `json:"cancelled"` //nolint:misspell // wire protocol key
 	}
 	if err := json.Unmarshal(*resp.Payload, &out); err != nil {
 		return false, fmt.Errorf("decode cancel_job payload: %w", err)
