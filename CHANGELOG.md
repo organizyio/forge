@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 Each release lists changes since the previous git tag (conventional-commit style groupings).
 
+## [v0.0.3] - 2026-04-10
+
+### Fixed
+- fix(release): ignore go/v tags when resolving root release version
+- fix(release): use semver in Go proxy module lookup
+
+
 ## [v0.0.2] - 2026-04-10
 
 ### Fixed
