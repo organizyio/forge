@@ -1,7 +1,7 @@
 # Forge
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/organizyio/forge/go.svg)](https://pkg.go.dev/github.com/organizyio/forge/go)
-![Go Version](https://img.shields.io/badge/go-1.26+-blue.svg)
+![Go Version](https://img.shields.io/badge/go-1.26.2+-blue.svg)
 [![crates.io](https://img.shields.io/crates/v/forge-worker-sdk.svg)](https://crates.io/crates/forge-worker-sdk)
 [![docs.rs](https://docs.rs/forge-worker-sdk/badge.svg)](https://docs.rs/forge-worker-sdk)
 [![CI](https://github.com/organizyio/forge/actions/workflows/ci.yml/badge.svg)](https://github.com/organizyio/forge/actions/workflows/ci.yml)

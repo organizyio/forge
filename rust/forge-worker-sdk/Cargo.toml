@@ -1,6 +1,6 @@
 [package]
 name = "forge-worker-sdk"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
 description = "Organizyio Forge — Rust worker IPC SDK (framing, server runtime, job registry, dispatcher)."
 license = "Apache-2.0"
