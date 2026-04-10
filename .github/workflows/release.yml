@@ -203,9 +203,12 @@ jobs:
           git add README.md CHANGELOG.md rust/forge-worker-sdk/Cargo.toml rust/Cargo.lock
           git diff --cached --quiet || \
             git commit -m "release v${{ steps.version.outputs.version }}"
+          git fetch origin "${PUSH_BRANCH}"
+          git rebase "origin/${PUSH_BRANCH}"
+          git push origin "HEAD:refs/heads/${PUSH_BRANCH}"
           git tag "v${{ steps.version.outputs.version }}"
           git tag "go/v${{ steps.version.outputs.version }}"
-          git push origin "HEAD:refs/heads/${PUSH_BRANCH}" "v${{ steps.version.outputs.version }}" "go/v${{ steps.version.outputs.version }}"
+          git push origin "v${{ steps.version.outputs.version }}" "go/v${{ steps.version.outputs.version }}"
 
       - name: Checkout tag for GoReleaser
         if: steps.version.outputs.skip != 'true'
