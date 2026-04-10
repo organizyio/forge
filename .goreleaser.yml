@@ -1,0 +1,28 @@
+# https://goreleaser.com
+# Forge ships the Go module as a library (no main package). Releases attach a
+# source archive; binary releases for the Rust example use .github/workflows/release.yml.
+version: 2
+
+project_name: forge
+
+builds:
+  - skip: true
+
+source:
+  enabled: true
+  format: tar.gz
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+
+release:
+  disable: false

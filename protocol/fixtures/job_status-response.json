@@ -1,0 +1,12 @@
+{
+  "id": "req-6",
+  "ok": true,
+  "payload": {
+    "job_id": "job-123",
+    "state": "running",
+    "progress": {
+      "phase": "walk",
+      "items_done": 5000
+    }
+  }
+}

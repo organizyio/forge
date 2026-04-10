@@ -1,0 +1,8 @@
+{
+  "id": "req-6",
+  "ok": false,
+  "error": {
+    "code": "JOB_NOT_FOUND",
+    "message": "job job-123 not found"
+  }
+}

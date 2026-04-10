@@ -1,0 +1,7 @@
+{
+  "id": "req-1",
+  "ok": true,
+  "payload": {
+    "pong": true
+  }
+}

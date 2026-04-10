@@ -1,0 +1,15 @@
+[package]
+name = "minimal-worker"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal Forge worker example (control-plane only; unknown product RPCs)."
+publish = false
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+forge-worker-sdk = { path = "../../forge-worker-sdk" }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

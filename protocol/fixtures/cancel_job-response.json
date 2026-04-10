@@ -1,0 +1,8 @@
+{
+  "id": "req-5",
+  "ok": true,
+  "payload": {
+    "cancelled": true,
+    "job_id": "job-123"
+  }
+}

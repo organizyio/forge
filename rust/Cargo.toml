@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "forge-worker-sdk",
+    "examples/*",
+]
+resolver = "2"

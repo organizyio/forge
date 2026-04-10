@@ -1,0 +1,4 @@
+* text=auto
+
+# Bash rejects CRLF on `set -o pipefail` (option becomes `pipefail^M`).
+*.sh text eol=lf

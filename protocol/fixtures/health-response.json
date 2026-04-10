@@ -1,0 +1,11 @@
+{
+  "id": "req-2",
+  "ok": true,
+  "payload": {
+    "status": "ok",
+    "active_jobs": 0,
+    "uptime_secs": 123,
+    "pid": 1234,
+    "version": "0.1.0"
+  }
+}

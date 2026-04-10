@@ -1,0 +1,29 @@
+[package]
+name = "forge-worker-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "Organizyio Forge — Rust worker IPC SDK (framing, server runtime, job registry, dispatcher)."
+license = "Apache-2.0"
+repository = "https://github.com/organizyio/forge"
+documentation = "https://docs.rs/forge-worker-sdk"
+readme = "../../README.md"
+
+[dependencies]
+# Serialisation
+serde       = { version = "1",   features = ["derive"] }
+serde_json  = "1"
+rmp-serde   = "1"           # MessagePack (primary wire encoding)
+bytes       = "1"           # BytesMut for FrameCodec
+
+# Async runtime + codec
+tokio       = { version = "1", features = ["full"] }
+tokio-util  = { version = "0.7", features = ["codec"] }
+futures     = "0.3"
+
+# Cross-platform IPC (Unix sockets + Windows named pipes)
+interprocess = { version = "2", features = ["tokio"] }
+
+# Error handling / logging
+anyhow      = "1"
+thiserror   = "1"
+tracing     = "0.1"

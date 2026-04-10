@@ -1,0 +1,270 @@
+name: Release
+
+# Three ways this workflow is triggered:
+#
+#   1. workflow_dispatch — manually from the GitHub UI (Actions → Release →
+#      Run workflow). Provide an explicit version (e.g. 1.2.0).
+#
+#   2. workflow_run — automatically when the CI workflow completes
+#      successfully on a push to main/master. The patch component of the
+#      last tag is incremented automatically. Skipped if HEAD is already
+#      tagged (i.e. the same commit would be released twice).
+#
+#   3. push (tags) — manual tag push; runs GoReleaser to create the GitHub Release.
+#
+# What this workflow does (prepare path):
+#   1. Verifies go/go.mod is tidy and Go + Rust + protocol checks pass.
+#   2. Prepends a new entry to CHANGELOG.md from git commits since the last tag.
+#   3. Updates the Go version badge in README.md from go/go.mod.
+#   4. Bumps rust/forge-worker-sdk/Cargo.toml to the new version.
+#   5. Commits those files back to the branch and pushes the vX.X.X tag.
+#   6. Runs GoReleaser in the same run (tag pushes with GITHUB_TOKEN do not
+#      trigger new workflow runs).
+#
+# Branch protection: if the default branch requires pull requests, the bot
+# commit in step 5 may fail unless github-actions[bot] is allowed to push, or
+# you run workflow_dispatch from a branch policy that permits it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 1.2.0 — without the "v" prefix)'
+        required: true
+        type: string
+
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main, master]
+
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  prepare:
+    name: Prepare release
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache: true
+          cache-dependency-path: go/go.sum
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            if git describe --exact-match --tags HEAD 2>/dev/null | grep -qE '^v[0-9]'; then
+              echo "HEAD is already tagged — nothing to release." >&2
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            else
+              LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+              MAJOR=$(echo "${LAST_TAG#v}" | cut -d. -f1)
+              MINOR=$(echo "${LAST_TAG#v}" | cut -d. -f2)
+              PATCH=$(echo "${LAST_TAG#v}" | cut -d. -f3)
+              echo "version=${MAJOR}.${MINOR}.$((PATCH + 1))" >> "$GITHUB_OUTPUT"
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Verify go.mod tidy
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          (cd go && go mod tidy)
+          git diff --exit-code go/go.mod go/go.sum
+
+      - name: Go unit tests (race)
+        if: steps.version.outputs.skip != 'true'
+        working-directory: go
+        run: go test -count=1 -race -cover ./...
+
+      - name: Protocol spec matches fixtures and go doc
+        if: steps.version.outputs.skip != 'true'
+        run: python3 protocol/tools/gen_spec.py --check
+
+      - name: Test forge-worker-sdk
+        if: steps.version.outputs.skip != 'true'
+        working-directory: rust
+        run: cargo test -p forge-worker-sdk
+
+      - name: Build minimal-worker
+        if: steps.version.outputs.skip != 'true'
+        working-directory: rust
+        run: cargo build -p minimal-worker
+
+      - name: Go integration tests
+        if: steps.version.outputs.skip != 'true'
+        working-directory: go
+        run: go test -tags=integration -timeout 120s -count=1 -v ./tests/integration/...
+
+      - name: golangci-lint
+        if: steps.version.outputs.skip != 'true'
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.1.6
+          working-directory: go
+          args: --config=${{ github.workspace }}/.golangci.yml
+
+      - name: Update Go version badge in README.md
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          GO_VER=$(awk '/^go /{print $2}' go/go.mod)
+          sed -i "s|go-[0-9][0-9]*\.[0-9][0-9]*+-blue|go-${GO_VER}+-blue|g" README.md
+
+      - name: Bump forge-worker-sdk version in Cargo.toml
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          sed -i "0,/^version = /s/^version = \".*\"/version = \"${VERSION}\"/" rust/forge-worker-sdk/Cargo.toml
+
+      - name: Sync Cargo.lock
+        if: steps.version.outputs.skip != 'true'
+        working-directory: rust
+        run: cargo update -p forge-worker-sdk
+
+      - name: Update CHANGELOG.md
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          VERSION="v${{ steps.version.outputs.version }}"
+          DATE=$(date +%Y-%m-%d)
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+
+          if [ -n "$LAST_TAG" ]; then
+            RANGE="${LAST_TAG}..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+
+          ADDED=$(git log "$RANGE" --pretty=format:"%s" --no-merges \
+            | grep -E '^feat(\(.+\))?[!:]?' | sed 's/^/- /' || true)
+          FIXED=$(git log "$RANGE" --pretty=format:"%s" --no-merges \
+            | grep -E '^fix(\(.+\))?[!:]?' | sed 's/^/- /' || true)
+          CHANGED=$(git log "$RANGE" --pretty=format:"%s" --no-merges \
+            | grep -E '^(refactor|perf|chore)(\(.+\))?[!:]?' | sed 's/^/- /' || true)
+          BREAKING=$(git log "$RANGE" --pretty=format:"%s" --no-merges \
+            | grep -E '!:' | sed 's/^/- /' || true)
+
+          SECTION="## [${VERSION}] - ${DATE}"$'\n'
+
+          if [ -n "$BREAKING" ]; then
+            SECTION+=$'\n### Breaking Changes\n'"$BREAKING"$'\n'
+          fi
+          if [ -n "$ADDED" ]; then
+            SECTION+=$'\n### Added\n'"$ADDED"$'\n'
+          fi
+          if [ -n "$FIXED" ]; then
+            SECTION+=$'\n### Fixed\n'"$FIXED"$'\n'
+          fi
+          if [ -n "$CHANGED" ]; then
+            SECTION+=$'\n### Changed\n'"$CHANGED"$'\n'
+          fi
+          if [ -z "$BREAKING$ADDED$FIXED$CHANGED" ]; then
+            SECTION+=$'\n### Changed\n- Maintenance and minor improvements.\n'
+          fi
+
+          HEADER=$(head -5 CHANGELOG.md)
+          BODY=$(tail -n +6 CHANGELOG.md)
+          printf '%s\n\n%s\n%s\n' "$HEADER" "$SECTION" "$BODY" > CHANGELOG.md
+
+      - name: Commit, tag, and push
+        if: steps.version.outputs.skip != 'true'
+        env:
+          PUSH_BRANCH: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md CHANGELOG.md rust/forge-worker-sdk/Cargo.toml rust/Cargo.lock
+          git diff --cached --quiet || \
+            git commit -m "release v${{ steps.version.outputs.version }}"
+          git tag "v${{ steps.version.outputs.version }}"
+          git push origin "HEAD:refs/heads/${PUSH_BRANCH}" "v${{ steps.version.outputs.version }}"
+
+      - name: Checkout tag for GoReleaser
+        if: steps.version.outputs.skip != 'true'
+        run: git checkout "v${{ steps.version.outputs.version }}"
+
+      - name: Run GoReleaser
+        if: steps.version.outputs.skip != 'true'
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify Go module proxy
+        if: steps.version.outputs.skip != 'true'
+        working-directory: go
+        run: GOPROXY=proxy.golang.org go list -m "github.com/organizyio/forge/go@v${{ steps.version.outputs.version }}"
+
+      - name: Publish forge-worker-sdk to crates.io
+        if: steps.version.outputs.skip != 'true' && vars.PUBLISH_TO_CRATES_IO == 'true'
+        working-directory: rust
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p forge-worker-sdk --locked
+
+  goreleaser:
+    name: Create GitHub Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache: true
+          cache-dependency-path: go/go.sum
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify Go module proxy
+        working-directory: go
+        run: GOPROXY=proxy.golang.org go list -m "github.com/organizyio/forge/go@${{ github.ref_name }}"
+
+      - name: Set up Rust (crates.io)
+        if: vars.PUBLISH_TO_CRATES_IO == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish forge-worker-sdk to crates.io
+        if: vars.PUBLISH_TO_CRATES_IO == 'true'
+        working-directory: rust
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p forge-worker-sdk --locked

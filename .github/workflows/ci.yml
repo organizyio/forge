@@ -1,0 +1,218 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+    paths-ignore:
+      - "docs/**"
+      - ".github/ISSUE_TEMPLATE/**"
+  pull_request:
+    branches: [main, master]
+    paths-ignore:
+      - "docs/**"
+      - ".github/ISSUE_TEMPLATE/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.filter.outputs.go }}
+      rust: ${{ steps.filter.outputs.rust }}
+      protocol: ${{ steps.filter.outputs.protocol }}
+      workflows: ${{ steps.filter.outputs.workflows }}
+      scripts: ${{ steps.filter.outputs.scripts }}
+      goreleaser: ${{ steps.filter.outputs.goreleaser }}
+      makefile: ${{ steps.filter.outputs.makefile }}
+      changelog: ${{ steps.filter.outputs.changelog }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            workflows:
+              - '.github/workflows/**'
+            go:
+              - 'go/**'
+            rust:
+              - 'rust/**'
+            protocol:
+              - 'protocol/**'
+            scripts:
+              - 'scripts/**'
+            goreleaser:
+              - '.goreleaser.yml'
+            makefile:
+              - 'Makefile'
+            changelog:
+              - 'CHANGELOG.md'
+
+  golangci:
+    name: Go lint
+    needs: changes
+    if: |
+      needs.changes.outputs.go == 'true' ||
+      needs.changes.outputs.workflows == 'true' ||
+      needs.changes.outputs.changelog == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache: true
+          cache-dependency-path: go/go.sum
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.1.6
+          working-directory: go
+          args: --config=${{ github.workspace }}/.golangci.yml
+
+  go-test:
+    name: Go test
+    needs: changes
+    if: |
+      needs.changes.outputs.go == 'true' ||
+      needs.changes.outputs.protocol == 'true' ||
+      needs.changes.outputs.workflows == 'true' ||
+      needs.changes.outputs.changelog == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache: true
+          cache-dependency-path: go/go.sum
+
+      - name: Go unit tests
+        working-directory: go
+        run: go test -count=1 ./...
+
+  forge-go-integration:
+    name: Protocol spec, Rust SDK, Go integration
+    needs: changes
+    if: |
+      needs.changes.outputs.go == 'true' ||
+      needs.changes.outputs.rust == 'true' ||
+      needs.changes.outputs.protocol == 'true' ||
+      needs.changes.outputs.workflows == 'true' ||
+      needs.changes.outputs.scripts == 'true' ||
+      needs.changes.outputs.changelog == 'true' ||
+      needs.changes.outputs.goreleaser == 'true' ||
+      needs.changes.outputs.makefile == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache: true
+          cache-dependency-path: go/go.sum
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Protocol spec matches fixtures and go doc
+        run: python3 protocol/tools/gen_spec.py --check
+
+      - name: Test forge-worker-sdk (protocol fixture contracts)
+        working-directory: rust
+        run: cargo test -p forge-worker-sdk
+
+      - name: Build minimal-worker
+        working-directory: rust
+        run: cargo build -p minimal-worker
+
+      - name: Go integration tests
+        working-directory: go
+        run: go test -tags=integration -timeout 120s -count=1 -v ./tests/integration/...
+
+  forge-rust-windows:
+    name: Rust + Go integration (Windows MSVC)
+    needs: changes
+    if: |
+      needs.changes.outputs.go == 'true' ||
+      needs.changes.outputs.rust == 'true' ||
+      needs.changes.outputs.protocol == 'true' ||
+      needs.changes.outputs.workflows == 'true' ||
+      needs.changes.outputs.scripts == 'true' ||
+      needs.changes.outputs.changelog == 'true' ||
+      needs.changes.outputs.goreleaser == 'true' ||
+      needs.changes.outputs.makefile == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache: true
+          cache-dependency-path: go/go.sum
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test forge-worker-sdk on Windows (MSVC host)
+        working-directory: rust
+        run: cargo test -p forge-worker-sdk
+
+      - name: Build minimal-worker (Windows)
+        working-directory: rust
+        run: cargo build -p minimal-worker
+
+      - name: Go integration tests (Windows named pipe)
+        working-directory: go
+        run: go test -tags=integration -timeout 120s -count=1 -v ./tests/integration/...
+
+  ci:
+    name: CI
+    needs: [changes, golangci, go-test, forge-go-integration, forge-rust-windows]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check job results
+        env:
+          GOLANGCI: ${{ needs.golangci.result }}
+          GOTEST: ${{ needs.go-test.result }}
+          LINUX: ${{ needs.forge-go-integration.result }}
+          WINDOWS: ${{ needs.forge-rust-windows.result }}
+        run: |
+          set -e
+          ok() {
+            name="$1"
+            r="$2"
+            echo "$name: $r"
+            case "$r" in
+              success|skipped) ;;
+              *) echo "Job $name ended with: $r"; exit 1 ;;
+            esac
+          }
+          ok golangci "$GOLANGCI"
+          ok go-test "$GOTEST"
+          ok forge-go-integration "$LINUX"
+          ok forge-rust-windows "$WINDOWS"
+          echo "All required CI jobs succeeded or were skipped appropriately."

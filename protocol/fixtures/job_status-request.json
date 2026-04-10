@@ -1,0 +1,7 @@
+{
+  "id": "req-6",
+  "method": "job_status",
+  "params": {
+    "job_id": "job-123"
+  }
+}

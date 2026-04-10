@@ -1,0 +1,7 @@
+{
+  "id": "req-5",
+  "method": "cancel_job",
+  "params": {
+    "job_id": "job-123"
+  }
+}
