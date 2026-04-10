@@ -78,10 +78,10 @@ async fn serve_unix<H: WorkerHandler>(
     encoding:    Encoding,
 ) -> anyhow::Result<()> {
     use interprocess::local_socket::tokio::prelude::*;
-    use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToFsName};
+    use interprocess::local_socket::{GenericFilePath, ListenerOptions, ToFsName};
 
     let _ = std::fs::remove_file(socket_path);
-    let name     = socket_path.to_fs_name::<GenericNamespaced>()?;
+    let name = socket_path.to_fs_name::<GenericFilePath>()?;
     let listener = ListenerOptions::new().name(name).create_tokio()?;
     info!(path = socket_path, "forge worker listening on Unix socket");
 
