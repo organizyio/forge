@@ -84,7 +84,8 @@ jobs:
               echo "HEAD is already tagged — nothing to release." >&2
               echo "skip=true" >> "$GITHUB_OUTPUT"
             else
-              LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+              LAST_TAG=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+              LAST_TAG=${LAST_TAG:-v0.0.0}
               MAJOR=$(echo "${LAST_TAG#v}" | cut -d. -f1)
               MINOR=$(echo "${LAST_TAG#v}" | cut -d. -f2)
               PATCH=$(echo "${LAST_TAG#v}" | cut -d. -f3)
@@ -153,7 +154,7 @@ jobs:
         run: |
           VERSION="v${{ steps.version.outputs.version }}"
           DATE=$(date +%Y-%m-%d)
-          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          LAST_TAG=$(git tag --list 'v*' --sort=-v:refname | head -n1)
 
           if [ -n "$LAST_TAG" ]; then
             RANGE="${LAST_TAG}..HEAD"
