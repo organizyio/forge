@@ -24,7 +24,8 @@ fn duplicate_register_errors() {
     let (ev_tx, _ev_rx) = mpsc::unbounded_channel();
     let (c1, _r1) = cancel_pair();
     let (c2, _r2) = cancel_pair();
-    reg.register(Job::new("dup".into(), ev_tx.clone(), c1)).unwrap();
+    reg.register(Job::new("dup".into(), ev_tx.clone(), c1))
+        .unwrap();
     let err = reg.register(Job::new("dup".into(), ev_tx, c2)).unwrap_err();
     assert!(err.contains("already registered"));
 }
@@ -34,7 +35,8 @@ fn cancel_marks_cancelled_and_drops_active() {
     let reg = JobRegistry::new();
     let (ev_tx, _ev_rx) = mpsc::unbounded_channel();
     let (cancel_tx, _cancel_rx) = cancel_pair();
-    reg.register(Job::new("j".into(), ev_tx, cancel_tx)).unwrap();
+    reg.register(Job::new("j".into(), ev_tx, cancel_tx))
+        .unwrap();
     assert!(reg.cancel("j"));
     assert_eq!(reg.active_count(), 0);
     let st = reg.status("j").expect("still in map");
@@ -46,7 +48,8 @@ fn emit_delivers_when_connected() {
     let reg = JobRegistry::new();
     let (ev_tx, mut ev_rx) = mpsc::unbounded_channel();
     let (cancel_tx, _cancel_rx) = cancel_pair();
-    reg.register(Job::new("e".into(), ev_tx, cancel_tx)).unwrap();
+    reg.register(Job::new("e".into(), ev_tx, cancel_tx))
+        .unwrap();
     let ev = WireEvent {
         event_type: "progress".into(),
         job_id: "e".into(),

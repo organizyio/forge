@@ -44,7 +44,11 @@ pub mod protocol;
 pub mod server;
 
 // Flat re-exports for the most commonly needed items
-pub use framing::{Encoding, Frame, FrameCodec, KIND_EVENT, KIND_REQUEST, KIND_RESPONSE, MAX_FRAME_PAYLOAD};
-pub use job_registry::{cancel_pair, CancelSignal, CancelToken, EventSender, JobRegistry, JobState, JobStatus};
 pub use dispatcher::{err_response, ok_response, unknown_method, WorkerHandler};
+pub use framing::{
+    Encoding, Frame, FrameCodec, KIND_EVENT, KIND_REQUEST, KIND_RESPONSE, MAX_FRAME_PAYLOAD,
+};
+pub use job_registry::{
+    cancel_pair, CancelSignal, CancelToken, EventSender, JobRegistry, JobState, JobStatus,
+};
 pub use server::run_worker;

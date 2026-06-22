@@ -4,10 +4,10 @@
 use std::sync::Arc;
 
 use forge_worker_sdk::dispatcher::{BaseDispatcher, WorkerHandler};
-use forge_worker_sdk::Encoding;
 use forge_worker_sdk::job_registry::{EventSender, JobRegistry};
 use forge_worker_sdk::protocol::{WireRequest, WireResponse};
 use forge_worker_sdk::unknown_method;
+use forge_worker_sdk::Encoding;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
@@ -75,10 +75,7 @@ async fn capabilities_reflect_handler() {
     let p = r.payload.expect("payload");
     assert_eq!(p.get("protocol_version"), Some(&json!(1)));
     assert_eq!(p.get("version"), Some(&json!("9.9.9-test")));
-    assert_eq!(
-        p.get("features"),
-        Some(&json!(["test.stub"]))
-    );
+    assert_eq!(p.get("features"), Some(&json!(["test.stub"])));
     assert_eq!(p.get("max_concurrent_jobs"), Some(&json!(1)));
     assert_eq!(p.get("encoding"), Some(&json!("msgpack")));
 }
@@ -99,11 +96,7 @@ async fn cancel_job_missing_is_job_not_found() {
     let (tx, _rx) = mpsc::unbounded_channel();
     let r = d
         .dispatch(
-            req(
-                "x",
-                "cancel_job",
-                Some(json!({ "job_id": "nope" })),
-            ),
+            req("x", "cancel_job", Some(json!({ "job_id": "nope" }))),
             tx,
         )
         .await;
@@ -118,11 +111,7 @@ async fn job_status_missing_is_job_not_found() {
     let (tx, _rx) = mpsc::unbounded_channel();
     let r = d
         .dispatch(
-            req(
-                "y",
-                "job_status",
-                Some(json!({ "job_id": "missing" })),
-            ),
+            req("y", "job_status", Some(json!({ "job_id": "missing" }))),
             tx,
         )
         .await;

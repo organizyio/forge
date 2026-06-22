@@ -28,11 +28,11 @@
 //! }
 //! ```
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::sync::Arc;
 #[cfg(not(test))]
 use std::time::Duration;
+use std::time::Instant;
 
 use serde_json::Value;
 use tracing::info;
@@ -60,9 +60,9 @@ pub trait WorkerHandler: Send + Sync + 'static {
     /// - `registry` — shared job registry; use to register, track, and cancel jobs.
     fn handle_method(
         &self,
-        req_id:   &str,
-        method:   &str,
-        params:   Option<Value>,
+        req_id: &str,
+        method: &str,
+        params: Option<Value>,
         event_tx: EventSender,
         registry: Arc<JobRegistry>,
     ) -> WireResponse;
@@ -74,34 +74,36 @@ pub trait WorkerHandler: Send + Sync + 'static {
     fn features(&self) -> Vec<String>;
 
     /// Maximum concurrent jobs this worker accepts.  Default: 1.
-    fn max_concurrent_jobs(&self) -> u32 { 1 }
+    fn max_concurrent_jobs(&self) -> u32 {
+        1
+    }
 }
 
 // ─── BASE DISPATCHER ─────────────────────────────────────────────────────────
 
 /// Wraps a [`WorkerHandler`] with automatic control-plane handling.
 pub struct BaseDispatcher<H: WorkerHandler> {
-    pub handler:   H,
-    pub registry:  Arc<JobRegistry>,
+    pub handler: H,
+    pub registry: Arc<JobRegistry>,
     negotiated_encoding: Encoding,
-    start_time:    Instant,
-    accepting:     AtomicBool,
+    start_time: Instant,
+    accepting: AtomicBool,
 }
 
 impl<H: WorkerHandler> BaseDispatcher<H> {
     pub fn new(handler: H, negotiated_encoding: Encoding) -> Self {
         Self {
             handler,
-            registry:   Arc::new(JobRegistry::new()),
+            registry: Arc::new(JobRegistry::new()),
             negotiated_encoding,
             start_time: Instant::now(),
-            accepting:  AtomicBool::new(true),
+            accepting: AtomicBool::new(true),
         }
     }
 
     /// Dispatch a single request.  Called by the server for every inbound frame.
     pub async fn dispatch(&self, req: WireRequest, event_tx: EventSender) -> WireResponse {
-        let id     = req.id.clone();
+        let id = req.id.clone();
         let method = req.method.as_str();
         let params = req.params;
 
@@ -111,22 +113,28 @@ impl<H: WorkerHandler> BaseDispatcher<H> {
             "health" => {
                 let active = self.registry.active_count();
                 let status = if active > 0 { "busy" } else { "ok" };
-                ok_response(&id, serde_json::json!({
-                    "status":      status,
-                    "active_jobs": active,
-                    "uptime_secs": self.start_time.elapsed().as_secs(),
-                    "pid":         std::process::id(),
-                    "version":     self.handler.worker_version(),
-                }))
+                ok_response(
+                    &id,
+                    serde_json::json!({
+                        "status":      status,
+                        "active_jobs": active,
+                        "uptime_secs": self.start_time.elapsed().as_secs(),
+                        "pid":         std::process::id(),
+                        "version":     self.handler.worker_version(),
+                    }),
+                )
             }
 
-            "capabilities" => ok_response(&id, serde_json::json!({
-                "version":              self.handler.worker_version(),
-                "protocol_version":     1,
-                "features":             self.handler.features(),
-                "max_concurrent_jobs":  self.handler.max_concurrent_jobs(),
-                "encoding":             self.negotiated_encoding.wire_name(),
-            })),
+            "capabilities" => ok_response(
+                &id,
+                serde_json::json!({
+                    "version":              self.handler.worker_version(),
+                    "protocol_version":     1,
+                    "features":             self.handler.features(),
+                    "max_concurrent_jobs":  self.handler.max_concurrent_jobs(),
+                    "encoding":             self.negotiated_encoding.wire_name(),
+                }),
+            ),
 
             "shutdown" => {
                 self.accepting.store(false, Ordering::SeqCst);
@@ -146,7 +154,10 @@ impl<H: WorkerHandler> BaseDispatcher<H> {
             "cancel_job" => {
                 let job_id = str_param(&params, "job_id").unwrap_or_default();
                 if self.registry.cancel(job_id) {
-                    ok_response(&id, serde_json::json!({"cancelled": true, "job_id": job_id}))
+                    ok_response(
+                        &id,
+                        serde_json::json!({"cancelled": true, "job_id": job_id}),
+                    )
                 } else {
                     err_response(&id, "JOB_NOT_FOUND", &format!("job {job_id} not found"))
                 }
@@ -156,12 +167,14 @@ impl<H: WorkerHandler> BaseDispatcher<H> {
                 let job_id = str_param(&params, "job_id").unwrap_or_default();
                 match self.registry.status(job_id) {
                     Some(s) => ok_response(&id, serde_json::to_value(s).unwrap_or_default()),
-                    None    => err_response(&id, "JOB_NOT_FOUND", &format!("job {job_id} not found")),
+                    None => err_response(&id, "JOB_NOT_FOUND", &format!("job {job_id} not found")),
                 }
             }
 
             // Everything else is product-specific.
-            _ => self.handler.handle_method(&id, method, params, event_tx, self.registry.clone()),
+            _ => self
+                .handler
+                .handle_method(&id, method, params, event_tx, self.registry.clone()),
         }
     }
 }
@@ -171,9 +184,9 @@ impl<H: WorkerHandler> BaseDispatcher<H> {
 /// Convenience: build a successful `WireResponse` with a JSON payload.
 pub fn ok_response(req_id: &str, payload: Value) -> WireResponse {
     WireResponse {
-        id:      req_id.to_owned(),
-        ok:      true,
-        error:   None,
+        id: req_id.to_owned(),
+        ok: true,
+        error: None,
         payload: Some(payload),
     }
 }
@@ -181,16 +194,24 @@ pub fn ok_response(req_id: &str, payload: Value) -> WireResponse {
 /// Convenience: build an error `WireResponse`.
 pub fn err_response(req_id: &str, code: &str, message: &str) -> WireResponse {
     WireResponse {
-        id:      req_id.to_owned(),
-        ok:      false,
-        error:   Some(ErrorPayload { code: code.to_owned(), message: message.to_owned(), detail: String::new() }),
+        id: req_id.to_owned(),
+        ok: false,
+        error: Some(ErrorPayload {
+            code: code.to_owned(),
+            message: message.to_owned(),
+            detail: String::new(),
+        }),
         payload: None,
     }
 }
 
 /// Convenience: return an `UNKNOWN_METHOD` error response.
 pub fn unknown_method(req_id: &str, method: &str) -> WireResponse {
-    err_response(req_id, "UNKNOWN_METHOD", &format!("unknown method: {method}"))
+    err_response(
+        req_id,
+        "UNKNOWN_METHOD",
+        &format!("unknown method: {method}"),
+    )
 }
 
 // ─── INTERNAL HELPERS ────────────────────────────────────────────────────────

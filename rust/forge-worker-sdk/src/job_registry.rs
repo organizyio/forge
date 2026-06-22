@@ -20,9 +20,9 @@ use crate::protocol::WireEvent;
 // ─── CHANNEL TYPES ───────────────────────────────────────────────────────────
 
 /// Sender half for forwarding [`WireEvent`]s to the connected Go client.
-pub type EventSender  = mpsc::UnboundedSender<WireEvent>;
+pub type EventSender = mpsc::UnboundedSender<WireEvent>;
 /// Cancel token: dropping *or* sending `()` signals the runner to stop.
-pub type CancelToken  = oneshot::Sender<()>;
+pub type CancelToken = oneshot::Sender<()>;
 /// Paired receiver end of a cancel token.
 pub type CancelSignal = oneshot::Receiver<()>;
 
@@ -45,10 +45,10 @@ pub enum JobState {
 impl std::fmt::Display for JobState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            JobState::Pending   => "pending",
-            JobState::Running   => "running",
+            JobState::Pending => "pending",
+            JobState::Running => "running",
             JobState::Completed => "completed",
-            JobState::Failed    => "failed",
+            JobState::Failed => "failed",
             JobState::Cancelled => "cancelled",
         };
         write!(f, "{}", s)
@@ -61,7 +61,7 @@ impl std::fmt::Display for JobState {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct JobStatus {
     pub job_id: String,
-    pub state:  String,
+    pub state: String,
     /// Opaque product progress (e.g. scan counters); omitted when empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<Value>,
@@ -72,28 +72,28 @@ pub struct JobStatus {
 // ─── JOB ENTRY ───────────────────────────────────────────────────────────────
 
 pub struct Job {
-    pub job_id:     String,
-    pub state:      JobState,
+    pub job_id: String,
+    pub state: JobState,
     pub started_at: Instant,
     /// Latest product-specific progress snapshot for `job_status`.
-    pub progress:   Option<Value>,
-    pub error_msg:  Option<String>,
+    pub progress: Option<Value>,
+    pub error_msg: Option<String>,
     /// Consumed once on cancel.
-    cancel:         Option<CancelToken>,
+    cancel: Option<CancelToken>,
     /// Channel to the connected client's write loop.  `None` after disconnect.
-    event_tx:       Option<EventSender>,
+    event_tx: Option<EventSender>,
 }
 
 impl Job {
     pub fn new(job_id: String, event_tx: EventSender, cancel: CancelToken) -> Self {
         Self {
             job_id,
-            state:      JobState::Pending,
+            state: JobState::Pending,
             started_at: Instant::now(),
-            progress:   None,
-            error_msg:  None,
-            cancel:     Some(cancel),
-            event_tx:   Some(event_tx),
+            progress: None,
+            error_msg: None,
+            cancel: Some(cancel),
+            event_tx: Some(event_tx),
         }
     }
 
@@ -133,12 +133,14 @@ pub struct JobRegistry {
 
 #[derive(Default)]
 struct RegistryInner {
-    jobs:            HashMap<String, Job>,
+    jobs: HashMap<String, Job>,
     total_completed: u64,
 }
 
 impl JobRegistry {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Register a new job.  Returns `Err` if a job with the same id already exists.
     pub fn register(&self, job: Job) -> Result<(), String> {
@@ -158,7 +160,7 @@ impl JobRegistry {
     pub fn set_completed(&self, job_id: &str, progress: Value) {
         let mut g = self.inner.lock().unwrap();
         if let Some(j) = g.jobs.get_mut(job_id) {
-            j.state    = JobState::Completed;
+            j.state = JobState::Completed;
             j.progress = Some(progress);
             info!(job_id, duration_ms = j.duration_ms(), "job completed");
         }
@@ -168,7 +170,7 @@ impl JobRegistry {
     pub fn set_failed(&self, job_id: &str, err: String) {
         let mut g = self.inner.lock().unwrap();
         if let Some(j) = g.jobs.get_mut(job_id) {
-            j.state     = JobState::Failed;
+            j.state = JobState::Failed;
             j.error_msg = Some(err.clone());
             error!(job_id, error = %err, "job failed");
         }
@@ -206,17 +208,18 @@ impl JobRegistry {
     pub fn status(&self, job_id: &str) -> Option<JobStatus> {
         let g = self.inner.lock().unwrap();
         g.jobs.get(job_id).map(|j| JobStatus {
-            job_id:   j.job_id.clone(),
-            state:    j.state.to_string(),
+            job_id: j.job_id.clone(),
+            state: j.state.to_string(),
             progress: j.progress.clone(),
-            error:    j.error_msg.clone().unwrap_or_default(),
+            error: j.error_msg.clone().unwrap_or_default(),
         })
     }
 
     /// Number of jobs currently in `Pending` or `Running` state.
     pub fn active_count(&self) -> u32 {
         let g = self.inner.lock().unwrap();
-        g.jobs.values()
+        g.jobs
+            .values()
             .filter(|j| j.state == JobState::Running || j.state == JobState::Pending)
             .count() as u32
     }
@@ -228,7 +231,9 @@ impl JobRegistry {
     /// Evict completed / failed / cancelled jobs, keeping at most `keep_n` most recent.
     pub fn gc(&self, keep_n: usize) {
         let mut g = self.inner.lock().unwrap();
-        let mut done: Vec<(String, Instant)> = g.jobs.iter()
+        let mut done: Vec<(String, Instant)> = g
+            .jobs
+            .iter()
             .filter(|(_, j)| j.state != JobState::Running && j.state != JobState::Pending)
             .map(|(k, j)| (k.clone(), j.started_at))
             .collect();

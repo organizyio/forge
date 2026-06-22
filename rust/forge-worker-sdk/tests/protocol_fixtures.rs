@@ -96,7 +96,8 @@ async fn fixture_capabilities_msgpack() {
     let d = BaseDispatcher::new(FixtureHandler, Encoding::Msgpack);
     let req = parse_request(&read_fixture("capabilities-request.json"));
     let actual = dispatch(&d, req).await;
-    let expected: Value = serde_json::from_str(&read_fixture("capabilities-response.json")).unwrap();
+    let expected: Value =
+        serde_json::from_str(&read_fixture("capabilities-response.json")).unwrap();
     assert_eq!(response_to_value(&actual), expected);
 }
 

@@ -59,8 +59,8 @@ pub async fn run_worker<H: WorkerHandler>(
 
 async fn serve<H: WorkerHandler>(
     socket_path: &str,
-    dispatcher:  Arc<BaseDispatcher<H>>,
-    encoding:    Encoding,
+    dispatcher: Arc<BaseDispatcher<H>>,
+    encoding: Encoding,
 ) -> anyhow::Result<()> {
     #[cfg(unix)]
     return serve_unix(socket_path, dispatcher, encoding).await;
@@ -74,8 +74,8 @@ async fn serve<H: WorkerHandler>(
 #[cfg(unix)]
 async fn serve_unix<H: WorkerHandler>(
     socket_path: &str,
-    dispatcher:  Arc<BaseDispatcher<H>>,
-    encoding:    Encoding,
+    dispatcher: Arc<BaseDispatcher<H>>,
+    encoding: Encoding,
 ) -> anyhow::Result<()> {
     use interprocess::local_socket::tokio::prelude::*;
     use interprocess::local_socket::{GenericFilePath, ListenerOptions, ToFsName};
@@ -105,9 +105,9 @@ async fn serve_unix<H: WorkerHandler>(
 
 #[cfg(windows)]
 async fn serve_windows<H: WorkerHandler>(
-    pipe_name:  &str,
+    pipe_name: &str,
     dispatcher: Arc<BaseDispatcher<H>>,
-    encoding:   Encoding,
+    encoding: Encoding,
 ) -> anyhow::Result<()> {
     use interprocess::os::windows::named_pipe::pipe_mode;
     use interprocess::os::windows::named_pipe::{PipeListenerOptions, PipeMode};
@@ -116,7 +116,10 @@ async fn serve_windows<H: WorkerHandler>(
         .path(pipe_name)
         .mode(PipeMode::Bytes)
         .create_tokio_duplex::<pipe_mode::Bytes>()?;
-    info!(pipe = pipe_name, "forge worker listening on Windows named pipe");
+    info!(
+        pipe = pipe_name,
+        "forge worker listening on Windows named pipe"
+    );
 
     loop {
         match listener.accept().await {
@@ -140,13 +143,12 @@ async fn serve_windows<H: WorkerHandler>(
 //   - a Framed read stream      →  decodes Request frames, spawns dispatch tasks
 
 async fn handle_connection<R, W, H>(
-    reader:     R,
-    writer:     W,
+    reader: R,
+    writer: W,
     dispatcher: Arc<BaseDispatcher<H>>,
-    encoding:   Encoding,
-)
-where
-    R: AsyncRead  + Unpin + Send + 'static,
+    encoding: Encoding,
+) where
+    R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
     H: WorkerHandler,
 {
@@ -181,8 +183,8 @@ where
     while let Some(result) = stream.next().await {
         match result {
             Ok(Frame::Request(req)) => {
-                let d       = dispatcher.clone();
-                let evt_tx  = event_tx.clone();
+                let d = dispatcher.clone();
+                let evt_tx = event_tx.clone();
                 let resp_tx = out_tx.clone();
                 tokio::spawn(async move {
                     let resp = d.dispatch(req, evt_tx).await;
