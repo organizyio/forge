@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 Each release lists changes since the previous git tag (conventional-commit style groupings).
 
+## [v0.0.7] - 2026-06-22
+
+### Fixed
+- fix: format worker sdk rust sources
+
+
 ## [v0.0.6] - 2026-04-10
 
 ### Changed
