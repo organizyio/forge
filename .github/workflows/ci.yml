@@ -40,26 +40,28 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: dorny/paths-filter@v3
+      - name: Detect paths using Git
         id: filter
-        with:
-          filters: |
-            workflows:
-              - '.github/workflows/**'
-            go:
-              - 'go/**'
-            rust:
-              - 'rust/**'
-            protocol:
-              - 'protocol/**'
-            scripts:
-              - 'scripts/**'
-            goreleaser:
-              - '.goreleaser.yml'
-            makefile:
-              - 'Makefile'
-            changelog:
-              - 'CHANGELOG.md'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          python3 - <<'PYCODE'
+          import os, subprocess
+          base = os.environ['BASE_SHA']
+          head = os.environ['HEAD_SHA']
+          if not base or set(base) == {'0'}:
+              paths = subprocess.check_output(['git', 'ls-tree', '-r', '--name-only', head], text=True).splitlines()
+          else:
+              paths = subprocess.check_output(['git', 'diff', '--name-only', base, head], text=True).splitlines()
+          patterns = {'go': 'go/', 'rust': 'rust/', 'protocol': 'protocol/',
+                      'workflows': '.github/workflows/', 'scripts': 'scripts/'}
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              for key, prefix in patterns.items():
+                  output.write(f"{key}={str(any(p.startswith(prefix) for p in paths)).lower()}\n")
+              for key, filename in {'goreleaser': '.goreleaser.yml', 'makefile': 'Makefile', 'changelog': 'CHANGELOG.md'}.items():
+                  output.write(f"{key}={str(filename in paths).lower()}\n")
+          PYCODE
 
   golangci:
     name: Go lint
