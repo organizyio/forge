@@ -92,3 +92,24 @@ fn progress_is_coalesced_and_terminal_counts_records() {
     assert_eq!(last.event.payload.as_ref().unwrap()["final_sequence"], 2);
     assert!(d.sender().blocking_reliable(event()).is_err());
 }
+
+#[test]
+fn byte_budget_bounds_large_events() {
+    for encoding in [Encoding::Json, Encoding::Msgpack] {
+        let (d, mut rx) = Delivery::new(encoding);
+        d.configure("id").unwrap();
+        let mut e = event();
+        e.payload = Some(serde_json::json!({"data":"x".repeat(900*1024)}));
+        for _ in 0..18 {
+            d.sender().blocking_reliable(e.clone()).unwrap();
+            rx.try_recv().unwrap();
+        }
+        assert!(d.stats()["queued_bytes"].as_u64().unwrap() <= 16 * 1024 * 1024);
+        let sender = d.sender();
+        let thread = std::thread::spawn(move || sender.blocking_reliable(e));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert!(!thread.is_finished());
+        d.close();
+        assert!(thread.join().unwrap().is_err());
+    }
+}

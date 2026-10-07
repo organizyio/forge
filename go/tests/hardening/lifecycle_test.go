@@ -166,6 +166,14 @@ func TestReliableEventsAcrossCreditWindow(t *testing.T) {
 			if err != nil || !response.OK {
 				t.Fatalf("start: %v", err)
 			}
+			// Let the producer fill its credit window without committing events.
+			time.Sleep(100 * time.Millisecond)
+			control, stopControl := context.WithTimeout(ctx, time.Second)
+			if _, err := w.Client().Ping(control); err != nil {
+				stopControl()
+				t.Fatalf("control blocked behind full event window: %v", err)
+			}
+			stopControl()
 			for i := 1; i <= 300; i++ {
 				select {
 				case ev, ok := <-stream.Events():
