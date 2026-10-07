@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 Each release lists changes since the previous git tag (conventional-commit style groupings).
 
+## [v0.0.10] - 2026-10-07
+
+### Changed
+- Maintenance and minor improvements.
+
+
 ## [v0.0.9] - 2026-10-07
 
 ### Added
