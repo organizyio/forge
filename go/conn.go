@@ -76,13 +76,14 @@ func (e Encoding) codecFormat() codec.Format {
 // Unix, or on Windows either a named pipe (address like \\.\pipe\Name or //./pipe/Name)
 // or an AF_UNIX path when supported.
 type Conn struct {
-	nc       net.Conn
-	mu       sync.Mutex
-	encoding Encoding
-	pending  sync.Map // map[string]chan *WireResponse
-	onEvent  func(ev *Event)
-	seq      atomic.Uint64
-	closed   chan struct{}
+	nc        net.Conn
+	mu        sync.Mutex
+	encoding  Encoding
+	pending   sync.Map // map[string]chan *WireResponse
+	onEvent   func(ev *Event)
+	seq       atomic.Uint64
+	closed    chan struct{}
+	closeOnce sync.Once
 }
 
 // Dial opens a connection to a worker (see Conn) and starts the read loop.
@@ -99,11 +100,7 @@ func Dial(ctx context.Context, socketPath string, encoding Encoding, onEvent fun
 
 // Close shuts down the connection.
 func (c *Conn) Close() error {
-	select {
-	case <-c.closed:
-	default:
-		close(c.closed)
-	}
+	c.closeOnce.Do(func() { close(c.closed) })
 	return c.nc.Close()
 }
 
@@ -141,6 +138,7 @@ func (c *Conn) writeFrame(kind uint8, payload []byte) error {
 }
 
 func (c *Conn) readLoop() {
+	defer func() { _ = c.Close() }()
 	for {
 		kind, body, err := frame.Read(c.nc)
 		if err != nil {

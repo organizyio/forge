@@ -156,7 +156,7 @@ impl<H: WorkerHandler> BaseDispatcher<H> {
                 if self.registry.cancel(job_id) {
                     ok_response(
                         &id,
-                        serde_json::json!({"cancelled": true, "job_id": job_id}),
+                        serde_json::json!({"cancelled": true, "cancel_requested": true, "job_id": job_id, "state": self.registry.status(job_id).map(|s| s.state)}),
                     )
                 } else {
                     err_response(&id, "JOB_NOT_FOUND", &format!("job {job_id} not found"))

@@ -188,7 +188,9 @@ The `health` response omits comparison of `uptime_secs` and `pid` in CI (volatil
   "ok": true,
   "payload": {
     "cancelled": true,
-    "job_id": "job-123"
+    "job_id": "job-123",
+    "cancel_requested": true,
+    "state": "cancelled"
   }
 }
 ```
@@ -235,7 +237,8 @@ The `health` response omits comparison of `uptime_secs` and `pid` in CI (volatil
     "progress": {
       "phase": "walk",
       "items_done": 5000
-    }
+    },
+    "cancel_requested": false
   }
 }
 ```

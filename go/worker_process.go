@@ -2,6 +2,7 @@ package forge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,11 +25,25 @@ type WorkerProcess struct {
 	log        *slog.Logger
 
 	mu      sync.Mutex
-	cmd     *exec.Cmd
 	client  *Client
 	healthy atomic.Bool
 	onEvent func(*Event)
-	done    chan struct{}
+	run     *workerRun
+	state   string
+}
+
+// ErrWorkerStarted means a worker lifecycle is already active.
+var ErrWorkerStarted = errors.New("worker already started or stopping")
+
+type workerRun struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	done     chan struct{}
+	stop     chan struct{}
+	stopOnce sync.Once
+	cmd      *exec.Cmd
+	exited   chan struct{}
+	client   *Client
 }
 
 // WorkerConfig configures a supervised worker process.
@@ -72,85 +87,154 @@ func NewWorkerProcess(id int, cfg WorkerConfig) *WorkerProcess {
 		logLevel:   logLevel,
 		onEvent:    cfg.OnEvent,
 		log:        log,
-		done:       make(chan struct{}),
+		state:      "stopped",
 	}
 }
 
-// Start launches the worker binary and connects.
+// Start launches one worker generation. Repeated starts require a completed stop.
 func (w *WorkerProcess) Start(ctx context.Context) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.startLocked(ctx)
+	if w.run != nil {
+		w.mu.Unlock()
+		return ErrWorkerStarted
+	}
+	lifetime, cancel := context.WithCancel(ctx)
+	r := &workerRun{ctx: lifetime, cancel: cancel, done: make(chan struct{}), stop: make(chan struct{})}
+	w.run = r
+	w.state = "starting"
+	w.mu.Unlock()
+	if err := w.launch(r); err != nil {
+		w.finish(r)
+		return err
+	}
+	go w.supervise(r)
+	return nil
 }
 
-func (w *WorkerProcess) startLocked(ctx context.Context) error {
+func (w *WorkerProcess) launch(r *workerRun) error {
+	w.mu.Lock()
+	if w.run != r || w.state == "stopping" || r.ctx.Err() != nil {
+		w.mu.Unlock()
+		return context.Canceled
+	}
 	w.cleanupSocket()
-	const readyTimeout = 10 * time.Second
-	cmd := exec.CommandContext(ctx, w.binaryPath, "--socket", w.socketPath, "--source-id", w.sourceID, "--log-level", w.logLevel, "--encoding", encodingFlag(w.encoding))
+	w.mu.Unlock()
+	cmd := exec.CommandContext(r.ctx, w.binaryPath, "--socket", w.socketPath, "--source-id", w.sourceID, "--log-level", w.logLevel, "--encoding", encodingFlag(w.encoding))
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("spawn worker: %w", err)
 	}
-	w.cmd = cmd
-	var waitErr error
+	exited := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(exited) }()
+	fail := func(err error) error { _ = cmd.Process.Kill(); <-exited; return err }
+	w.mu.Lock()
+	r.cmd = cmd
+	r.exited = exited
+	w.mu.Unlock()
+	ready, cancel := context.WithTimeout(r.ctx, 10*time.Second)
+	defer cancel()
+	var err error
 	if isWorkerPipePath(w.socketPath) {
-		waitErr = waitForPipeReady(ctx, w.socketPath, readyTimeout)
+		err = waitForPipeReady(ready, w.socketPath, 10*time.Second)
 	} else {
-		waitErr = waitForSocket(ctx, w.socketPath, readyTimeout)
+		err = waitForSocket(ready, w.socketPath, 10*time.Second)
 	}
-	if waitErr != nil {
-		_ = cmd.Process.Kill()
-		if isWorkerPipePath(w.socketPath) {
-			return fmt.Errorf("worker pipe never became ready: %w", waitErr)
-		}
-		return fmt.Errorf("worker socket never appeared: %w", waitErr)
-	}
-	conn, err := Dial(ctx, w.socketPath, w.encoding, w.onEvent)
 	if err != nil {
-		_ = cmd.Process.Kill()
-		return fmt.Errorf("connect to worker: %w", err)
+		return fail(fmt.Errorf("worker readiness: %w", err))
+	}
+	conn, err := Dial(ready, w.socketPath, w.encoding, w.onEvent)
+	if err != nil {
+		return fail(fmt.Errorf("connect to worker: %w", err))
 	}
 	client := NewClient(conn)
-	if _, err := client.Ping(ctx); err != nil {
-		_ = cmd.Process.Kill()
-		return fmt.Errorf("worker ping failed: %w", err)
+	if _, err = client.Ping(ready); err != nil {
+		_ = client.Close()
+		return fail(fmt.Errorf("worker ping: %w", err))
 	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.run != r || w.state == "stopping" || r.ctx.Err() != nil {
+		_ = client.Close()
+		return fail(context.Canceled)
+	}
+	r.client = client
 	w.client = client
+	w.state = "running"
 	w.healthy.Store(true)
-	go w.supervise(ctx)
 	return nil
 }
 
-func (w *WorkerProcess) supervise(ctx context.Context) {
-	cmd := w.cmd
-	_ = cmd.Wait()
-	w.healthy.Store(false)
-	w.log.Warn("worker exited, scheduling restart")
-	if ctx.Err() != nil {
-		close(w.done)
-		return
+func (w *WorkerProcess) finish(r *workerRun) {
+	r.cancel()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if r.client != nil {
+		_ = r.client.Close()
 	}
-	backoff := 500 * time.Millisecond
-	for i := 0; i < 5; i++ {
-		select {
-		case <-ctx.Done():
-			close(w.done)
-			return
-		case <-time.After(backoff):
-		}
-		backoff *= 2
+	if w.run == r {
+		w.healthy.Store(false)
+		w.client = nil
+		w.cleanupSocket()
+		w.run = nil
+		w.state = "stopped"
+	}
+	close(r.done)
+}
+
+func (w *WorkerProcess) supervise(r *workerRun) {
+	defer w.finish(r)
+	for {
 		w.mu.Lock()
-		err := w.startLocked(ctx)
+		exited := r.exited
 		w.mu.Unlock()
-		if err == nil {
-			w.log.Info("worker restarted successfully")
+		select {
+		case <-exited:
+		case <-r.stop:
+			<-exited
+			return
+		case <-r.ctx.Done():
+			<-exited
 			return
 		}
-		w.log.Error("restart attempt failed", "err", err, "attempt", i+1)
+		w.mu.Lock()
+		w.healthy.Store(false)
+		if r.client != nil {
+			_ = r.client.Close()
+			r.client = nil
+		}
+		w.client = nil
+		stopping := w.state == "stopping"
+		if !stopping {
+			w.state = "restarting"
+		}
+		w.mu.Unlock()
+		if stopping || r.ctx.Err() != nil {
+			return
+		}
+		restarted := false
+		for i := 0; i < 5; i++ {
+			timer := time.NewTimer((500 * time.Millisecond) << i)
+			select {
+			case <-r.stop:
+				timer.Stop()
+				return
+			case <-r.ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			if err := w.launch(r); err == nil {
+				restarted = true
+				break
+			} else {
+				w.log.Error("restart failed", "err", err, "attempt", i+1)
+			}
+		}
+		if !restarted {
+			return
+		}
 	}
-	w.log.Error("worker failed to restart after 5 attempts")
-	close(w.done)
 }
 
 // Client returns the RPC client when the worker is healthy.
@@ -163,19 +247,44 @@ func (w *WorkerProcess) Client() *Client {
 	return w.client
 }
 
-// Stop shuts down the worker process.
-func (w *WorkerProcess) Stop(ctx context.Context) {
+// Stop preserves the original API and waits within ctx for shutdown.
+func (w *WorkerProcess) Stop(ctx context.Context) { _ = w.StopAndWait(ctx) }
+
+// StopAndWait prevents restart before shutting down and reaps the process.
+func (w *WorkerProcess) StopAndWait(ctx context.Context) error {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.client != nil {
-		_, _ = w.client.Shutdown(ctx)
-		_ = w.client.Close()
-		w.client = nil
+	r := w.run
+	if r == nil {
+		w.mu.Unlock()
+		return nil
 	}
-	if w.cmd != nil && w.cmd.Process != nil {
-		_ = w.cmd.Process.Kill()
+	w.state = "stopping"
+	w.healthy.Store(false)
+	var first bool
+	r.stopOnce.Do(func() { close(r.stop); first = true })
+	client := r.client
+	w.mu.Unlock()
+	if first {
+		// Startup is canceled immediately; a running worker gets bounded graceful shutdown.
+		if client == nil {
+			r.cancel()
+		} else {
+			_, _ = client.Shutdown(ctx)
+			_ = client.Close()
+		}
 	}
-	w.cleanupSocket()
+	select {
+	case <-r.done:
+		return nil
+	case <-ctx.Done():
+		r.cancel()
+		return ctx.Err()
+	}
 }
 
 func (w *WorkerProcess) cleanupSocket() {

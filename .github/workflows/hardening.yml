@@ -1,0 +1,32 @@
+name: Native lifecycle hardening
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p forge-worker-sdk
+        working-directory: rust
+      - run: cargo build -p minimal-worker
+        working-directory: rust
+      - name: Native Go to Rust lifecycle
+        shell: bash
+        run: |
+          extension=""
+          if [[ "$RUNNER_OS" == Windows ]]; then extension=".exe"; fi
+          export FORGE_MINIMAL_WORKER="$GITHUB_WORKSPACE/rust/target/debug/minimal-worker$extension"
+          cd go
+          go test -race -tags=hardening ./...
