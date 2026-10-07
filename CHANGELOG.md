@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 Each release lists changes since the previous git tag (conventional-commit style groupings).
 
+## [v0.0.8] - 2026-10-07
+
+### Fixed
+- fix(lifecycle): prevent restarts after stop and guard terminal job states
+
+
 ## [v0.0.7] - 2026-06-22
 
 ### Fixed
