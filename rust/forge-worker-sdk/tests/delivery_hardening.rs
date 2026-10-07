@@ -60,3 +60,35 @@ fn oversized_and_unnegotiated_events_fail_closed() {
     ));
     assert!(d.is_closed());
 }
+
+#[test]
+fn progress_is_coalesced_and_terminal_counts_records() {
+    let (d, mut rx) = Delivery::new(Encoding::Json);
+    d.configure("id").unwrap();
+    for n in 0..1000 {
+        let mut e = event();
+        e.event_type = "job_progress".into();
+        e.payload = Some(serde_json::json!({"seen":n}));
+        d.sender().send(e).unwrap();
+    }
+    assert_eq!(d.stats()["queued_events"], 1);
+    assert_eq!(d.stats()["progress_dropped"], 999);
+    let Frame::Event(token) = rx.try_recv().unwrap() else {
+        panic!("progress frame")
+    };
+    let latest = d.latest_progress(token);
+    assert_eq!(latest.payload.as_ref().unwrap()["seen"], 999);
+    d.progress_written(&latest);
+    assert_eq!(d.stats()["queued_bytes"], 0);
+    d.sender().blocking_reliable(event()).unwrap();
+    let mut terminal = event();
+    terminal.event_type = "job_completed".into();
+    d.sender().blocking_reliable(terminal).unwrap();
+    rx.try_recv().unwrap();
+    let Frame::ReliableEvent(last) = rx.try_recv().unwrap() else {
+        panic!("terminal frame")
+    };
+    assert_eq!(last.event.payload.as_ref().unwrap()["record_count"], 1);
+    assert_eq!(last.event.payload.as_ref().unwrap()["final_sequence"], 2);
+    assert!(d.sender().blocking_reliable(event()).is_err());
+}

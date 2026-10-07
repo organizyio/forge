@@ -8,6 +8,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/organizyio/forge/go/internal/codec"
 	"github.com/organizyio/forge/go/internal/frame"
@@ -152,6 +153,9 @@ func (c *Conn) Call(ctx context.Context, method string, params any) (*WireRespon
 func (c *Conn) writeFrame(kind uint8, payload []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := c.nc.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return err
+	}
 	return frame.Write(c.nc, kind, payload)
 }
 

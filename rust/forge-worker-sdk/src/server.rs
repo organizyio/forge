@@ -168,6 +168,10 @@ async fn handle_connection<R, W, H>(
                 else=>None,
             };
             let Some((frame, _permit)) = next else { break };
+            let frame = match frame {
+                Frame::Event(e) => Frame::Event(writer_delivery.latest_progress(e)),
+                other => other,
+            };
             let progress = if let Frame::Event(e) = &frame {
                 Some(e.clone())
             } else {

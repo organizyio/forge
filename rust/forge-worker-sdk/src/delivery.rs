@@ -38,6 +38,7 @@ struct State {
     count: usize,
     bytes: usize,
     jobs: HashMap<String, JobCredit>,
+    progress: HashMap<String, (WireEvent, usize)>,
     cancelled: HashSet<String>,
     dropped: u64,
     failures: u64,
@@ -149,7 +150,22 @@ impl Delivery {
             event.event_type.as_str(),
             "job_completed" | "job_failed" | "job_cancelled"
         );
-        let (frame, size, sequence) = if reliable {
+        if !reliable && event.event_type == "job_progress" {
+            let size = self.size(&event)?;
+            if size > MAX_EVENT_BYTES {
+                return Err(DeliveryError::Oversized);
+            }
+            if let Some((_, previous)) = s.progress.get(&job) {
+                let previous = *previous;
+                if s.bytes - previous + size <= MAX_BYTES {
+                    s.bytes = s.bytes - previous + size;
+                    s.progress.insert(job, (event, size));
+                }
+                s.dropped += 1;
+                return Ok(());
+            }
+        }
+        let (mut frame, size, sequence) = if reliable {
             let id = s.id.clone().ok_or(DeliveryError::NotNegotiated)?;
             // Bound retained sequence tombstones too. A fresh connection is required
             // after this many jobs; silently forgetting a sequence would permit replay.
@@ -213,6 +229,12 @@ impl Delivery {
                 .unwrap()
                 .0;
         }
+        if !reliable && event.event_type == "job_progress" {
+            s.progress.insert(job.clone(), (event.clone(), size));
+            let mut token = event.clone();
+            token.payload = None;
+            frame = Frame::Event(token);
+        }
         if self.tx.try_send(frame).is_err() {
             s.closed = true;
             s.failures += 1;
@@ -231,6 +253,19 @@ impl Delivery {
             j.pending.insert(sequence, size);
         }
         Ok(())
+    }
+    /// Resolve a queued progress token to its newest bounded value.
+    pub fn latest_progress(&self, event: WireEvent) -> WireEvent {
+        if event.event_type != "job_progress" {
+            return event;
+        }
+        self.state
+            .lock()
+            .unwrap()
+            .progress
+            .remove(&event.job_id)
+            .map(|(latest, _)| latest)
+            .unwrap_or(event)
     }
     pub fn progress_written(&self, event: &WireEvent) {
         if let Ok(size) = self.size(event) {

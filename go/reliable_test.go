@@ -3,9 +3,10 @@ package forge
 import (
 	"context"
 	"errors"
-	"github.com/organizyio/forge/go/internal/codec"
 	"testing"
 	"time"
+
+	"github.com/organizyio/forge/go/internal/codec"
 )
 
 func TestReliableRejectsOutOfOrderCommit(t *testing.T) {
