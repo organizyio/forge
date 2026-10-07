@@ -102,7 +102,12 @@ impl<H: WorkerHandler> BaseDispatcher<H> {
     }
 
     /// Dispatch a single request.  Called by the server for every inbound frame.
-    pub async fn dispatch(&self, req: WireRequest, event_tx: EventSender) -> WireResponse {
+    pub async fn dispatch(
+        &self,
+        req: WireRequest,
+        event_tx: impl Into<EventSender>,
+    ) -> WireResponse {
+        let event_tx = event_tx.into();
         let id = req.id.clone();
         let method = req.method.as_str();
         let params = req.params;
@@ -130,7 +135,7 @@ impl<H: WorkerHandler> BaseDispatcher<H> {
                 serde_json::json!({
                     "version":              self.handler.worker_version(),
                     "protocol_version":     1,
-                    "features":             self.handler.features(),
+                    "features":             ({ let mut f = self.handler.features(); f.push("reliable_events_v1".into()); f }),
                     "max_concurrent_jobs":  self.handler.max_concurrent_jobs(),
                     "encoding":             self.negotiated_encoding.wire_name(),
                 }),

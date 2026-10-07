@@ -24,12 +24,13 @@ type WorkerProcess struct {
 	logLevel   string
 	log        *slog.Logger
 
-	mu      sync.Mutex
-	client  *Client
-	healthy atomic.Bool
-	onEvent func(*Event)
-	run     *workerRun
-	state   string
+	mu        sync.Mutex
+	client    *Client
+	healthy   atomic.Bool
+	onEvent   func(*Event)
+	onConnect func(context.Context, *Client) error
+	run       *workerRun
+	state     string
 }
 
 // ErrWorkerStarted means a worker lifecycle is already active.
@@ -59,6 +60,8 @@ type WorkerConfig struct {
 	Encoding   Encoding
 	LogLevel   string
 	OnEvent    func(*Event)
+	// OnConnect must initialize negotiated delivery before the process becomes healthy.
+	OnConnect func(context.Context, *Client) error
 	// Log receives process lifecycle messages. If nil, logs are discarded.
 	Log *slog.Logger
 }
@@ -86,6 +89,7 @@ func NewWorkerProcess(id int, cfg WorkerConfig) *WorkerProcess {
 		encoding:   cfg.Encoding,
 		logLevel:   logLevel,
 		onEvent:    cfg.OnEvent,
+		onConnect:  cfg.OnConnect,
 		log:        log,
 		state:      "stopped",
 	}
@@ -151,6 +155,12 @@ func (w *WorkerProcess) launch(r *workerRun) error {
 	if _, err = client.Ping(ready); err != nil {
 		_ = client.Close()
 		return fail(fmt.Errorf("worker ping: %w", err))
+	}
+	if w.onConnect != nil {
+		if err := w.onConnect(ready, client); err != nil {
+			_ = client.Close()
+			return fail(err)
+		}
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()

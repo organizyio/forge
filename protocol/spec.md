@@ -116,7 +116,8 @@ The `health` response omits comparison of `uptime_secs` and `pid` in CI (volatil
     "version": "0.1.0",
     "protocol_version": 1,
     "features": [
-      "hash.xxh64"
+      "hash.xxh64",
+      "reliable_events_v1"
     ],
     "max_concurrent_jobs": 1,
     "encoding": "msgpack"
@@ -293,9 +294,12 @@ func (e *ErrorPayload) Error() string
 package forge // import "github.com/organizyio/forge/go"
 
 type Event struct {
-	Type    string
-	JobID   string
-	RawBody json.RawMessage
+	Type       string
+	JobID      string
+	RawBody    json.RawMessage
+	DeliveryID string
+	Sequence   uint64
+	WireBytes  int
 }
     Event is a push notification from a worker connection.
 ```

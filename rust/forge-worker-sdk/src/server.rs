@@ -23,11 +23,11 @@ use futures::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
+use crate::dispatcher::{err_response, ok_response};
 use crate::dispatcher::{BaseDispatcher, WorkerHandler};
 use crate::framing::{Encoding, Frame, FrameCodec};
-use crate::protocol::WireEvent;
 
 // ─── PUBLIC ENTRY POINT ──────────────────────────────────────────────────────
 
@@ -152,52 +152,129 @@ async fn handle_connection<R, W, H>(
     W: AsyncWrite + Unpin + Send + 'static,
     H: WorkerHandler,
 {
-    // outbound: coalesces responses + events into a single write stream
-    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Frame>();
-    // event: product tasks push WireEvents here; we wrap and forward to out_tx
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<WireEvent>();
-
-    // Event fan-out task
-    let out_tx_evt = out_tx.clone();
-    tokio::spawn(async move {
-        while let Some(ev) = event_rx.recv().await {
-            if out_tx_evt.send(Frame::Event(ev)).is_err() {
-                break;
-            }
-        }
-    });
-
-    // Write loop
-    let mut sink = Framed::new(writer, FrameCodec::new(encoding));
+    let (delivery, mut events) = crate::delivery::Delivery::new(encoding);
+    let (responses, mut response_rx) =
+        mpsc::channel::<(Frame, tokio::sync::OwnedSemaphorePermit)>(32);
+    let response_bytes = Arc::new(tokio::sync::Semaphore::new(1024 * 1024));
+    let requests = Arc::new(tokio::sync::Semaphore::new(16));
+    let writer_delivery = delivery.clone();
     let write_handle = tokio::spawn(async move {
-        while let Some(frame) = out_rx.recv().await {
-            if let Err(e) = sink.send(frame).await {
-                warn!("write error: {e}");
+        let mut sink = Framed::new(writer, FrameCodec::new(encoding));
+        loop {
+            let next = tokio::select! {biased;
+                Some((frame,permit))=response_rx.recv()=>Some((frame,Some(permit))),
+                Some(frame)=events.recv()=>Some((frame,None)),
+                _=tokio::time::sleep(std::time::Duration::from_millis(50))=>{if writer_delivery.is_closed(){break;}continue;},
+                else=>None,
+            };
+            let Some((frame, _permit)) = next else { break };
+            let frame = match frame {
+                Frame::Event(e) => Frame::Event(writer_delivery.latest_progress(e)),
+                other => other,
+            };
+            let progress = if let Frame::Event(e) = &frame {
+                Some(e.clone())
+            } else {
+                None
+            };
+            if !matches!(
+                tokio::time::timeout(std::time::Duration::from_secs(5), sink.send(frame)).await,
+                Ok(Ok(()))
+            ) {
                 break;
             }
+            if let Some(event) = progress {
+                writer_delivery.progress_written(&event);
+            }
         }
+        writer_delivery.close();
     });
-
-    // Read loop — one dispatch task per request so slow handlers don't block reads
     let mut stream = Framed::new(reader, FrameCodec::new(encoding));
-    while let Some(result) = stream.next().await {
-        match result {
-            Ok(Frame::Request(req)) => {
-                let d = dispatcher.clone();
-                let evt_tx = event_tx.clone();
-                let resp_tx = out_tx.clone();
-                tokio::spawn(async move {
-                    let resp = d.dispatch(req, evt_tx).await;
-                    let _ = resp_tx.send(Frame::Response(resp));
-                });
+    loop {
+        let result = tokio::select! {frame=stream.next()=>frame,_=tokio::time::sleep(std::time::Duration::from_millis(50))=>{if delivery.is_closed(){break;}continue;}};
+        let Some(Ok(Frame::Request(req))) = result else {
+            break;
+        };
+        let id = req.id.clone();
+        let params = req.params.clone().unwrap_or_default();
+        let direct = match req.method.as_str() {
+            "configure_event_delivery" => Some(
+                match delivery.configure(
+                    params
+                        .get("delivery_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(""),
+                ) {
+                    Ok(()) => ok_response(&id, serde_json::json!({"configured":true})),
+                    Err(e) => err_response(&id, "DELIVERY_CONFIGURATION", &e.to_string()),
+                },
+            ),
+            "ack_events" => Some(
+                match delivery.ack(
+                    params
+                        .get("delivery_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(""),
+                    params.get("job_id").and_then(|v| v.as_str()).unwrap_or(""),
+                    params
+                        .get("through_sequence")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(u64::MAX),
+                ) {
+                    Ok(()) => ok_response(&id, serde_json::json!({"acknowledged":true})),
+                    Err(e) => err_response(&id, "INVALID_ACK", &e.to_string()),
+                },
+            ),
+            "delivery_stats" => Some(ok_response(&id, delivery.stats())),
+            _ => None,
+        };
+        // Never wait for a product request slot on the reader: acknowledgments must remain readable.
+        let permit = if direct.is_none() {
+            match requests.clone().try_acquire_owned() {
+                Ok(p) => Some(p),
+                Err(_) => {
+                    delivery.close();
+                    break;
+                }
             }
-            Ok(_) => warn!("unexpected frame kind received from client — ignoring"),
-            Err(e) => {
-                error!("frame decode error: {e}");
-                break;
+        } else {
+            None
+        };
+        let dispatcher = dispatcher.clone();
+        let sender = delivery.sender();
+        let response_tx = responses.clone();
+        let budget = response_bytes.clone();
+        let d = delivery.clone();
+        tokio::spawn(async move {
+            let _request_permit = permit;
+            let response = match direct {
+                Some(r) => r,
+                None => dispatcher.dispatch(req, sender).await,
+            };
+            let size = match encoding {
+                Encoding::Json => serde_json::to_vec(&response)
+                    .map(|v| v.len())
+                    .unwrap_or(usize::MAX),
+                Encoding::Msgpack => rmp_serde::to_vec_named(&response)
+                    .map(|v| v.len())
+                    .unwrap_or(usize::MAX),
+            };
+            if size > 1024 * 1024 {
+                d.close();
+                return;
             }
-        }
+            let Ok(credit) = budget.try_acquire_many_owned(size as u32) else {
+                d.close();
+                return;
+            };
+            if response_tx
+                .try_send((Frame::Response(response), credit))
+                .is_err()
+            {
+                d.close();
+            }
+        });
     }
-
+    delivery.close();
     write_handle.abort();
 }

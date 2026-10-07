@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde_json::Value;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 use tracing::info;
 
 use crate::protocol::WireEvent;
@@ -20,7 +20,7 @@ use crate::protocol::WireEvent;
 // ─── CHANNEL TYPES ───────────────────────────────────────────────────────────
 
 /// Sender half for forwarding [`WireEvent`]s to the connected Go client.
-pub type EventSender = mpsc::UnboundedSender<WireEvent>;
+pub use crate::delivery::EventSender;
 /// Cancel token: dropping *or* sending `()` signals the runner to stop.
 pub type CancelToken = oneshot::Sender<()>;
 /// Paired receiver end of a cancel token.
@@ -88,7 +88,7 @@ pub struct Job {
 }
 
 impl Job {
-    pub fn new(job_id: String, event_tx: EventSender, cancel: CancelToken) -> Self {
+    pub fn new(job_id: String, event_tx: impl Into<EventSender>, cancel: CancelToken) -> Self {
         Self {
             job_id,
             state: JobState::Pending,
@@ -97,7 +97,7 @@ impl Job {
             progress: None,
             error_msg: None,
             cancel: Some(cancel),
-            event_tx: Some(event_tx),
+            event_tx: Some(event_tx.into()),
         }
     }
 
@@ -240,6 +240,9 @@ impl JobRegistry {
         if let Some(j) = g.jobs.get_mut(job_id) {
             let was_pending = j.state == JobState::Pending;
             j.cancel();
+            if let Some(EventSender::Bounded(d)) = &j.event_tx {
+                d.cancel(job_id);
+            }
             if was_pending && j.state == JobState::Cancelled {
                 g.total_completed += 1;
             }
@@ -263,6 +266,23 @@ impl JobRegistry {
         if let Some(j) = g.jobs.get(job_id) {
             j.emit(ev);
         }
+    }
+
+    /// Emits authoritative data without retaining the registry lock while waiting.
+    pub fn emit_reliable(
+        &self,
+        job_id: &str,
+        event: WireEvent,
+    ) -> Result<(), crate::delivery::DeliveryError> {
+        let sender = self
+            .inner
+            .lock()
+            .unwrap()
+            .jobs
+            .get(job_id)
+            .and_then(|j| j.event_tx.clone())
+            .ok_or(crate::delivery::DeliveryError::Interrupted)?;
+        sender.blocking_reliable(event)
     }
 
     pub fn detach_client(&self, job_id: &str) {

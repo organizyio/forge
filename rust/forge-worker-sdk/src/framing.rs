@@ -64,6 +64,7 @@ pub enum Frame {
     Request(WireRequest),
     Response(WireResponse),
     Event(WireEvent),
+    ReliableEvent(crate::protocol::SequencedEvent),
 }
 
 // ─── CODEC ───────────────────────────────────────────────────────────────────
@@ -139,6 +140,7 @@ impl Encoder<Frame> for FrameCodec {
             Frame::Request(r) => (KIND_REQUEST, self.marshal(r)?),
             Frame::Response(r) => (KIND_RESPONSE, self.marshal(r)?),
             Frame::Event(e) => (KIND_EVENT, self.marshal(e)?),
+            Frame::ReliableEvent(e) => (KIND_EVENT, self.marshal(e)?),
         };
 
         dst.reserve(5 + payload.len());
