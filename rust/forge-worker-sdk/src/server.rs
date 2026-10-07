@@ -331,4 +331,88 @@ mod bounded_writer_tests {
             assert!(started.elapsed() >= std::time::Duration::from_secs(4));
         }
     }
+    struct HeldRequests {
+        gate: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+        active: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl WorkerHandler for HeldRequests {
+        fn handle_method(
+            &self,
+            id: &str,
+            _: &str,
+            _: Option<Value>,
+            _: EventSender,
+            _: Arc<JobRegistry>,
+        ) -> WireResponse {
+            self.active
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let (lock, changed) = &*self.gate;
+            let mut released = lock.lock().unwrap();
+            while !*released {
+                released = changed.wait(released).unwrap();
+            }
+            ok_response(id, serde_json::json!({}))
+        }
+        fn worker_version(&self) -> &str {
+            "test"
+        }
+        fn features(&self) -> Vec<String> {
+            vec![]
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 20)]
+    async fn seventeenth_dispatched_request_closes_bounded_connection() {
+        for encoding in [Encoding::Json, Encoding::Msgpack] {
+            let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+            let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let handler = HeldRequests {
+                gate: gate.clone(),
+                active: active.clone(),
+            };
+            let (client, server) = tokio::io::duplex(64 * 1024);
+            let (reader, writer) = tokio::io::split(server);
+            let task = tokio::spawn(handle_connection(
+                reader,
+                writer,
+                Arc::new(BaseDispatcher::new(handler, encoding)),
+                encoding,
+            ));
+            let mut peer = Framed::new(client, FrameCodec::new(encoding));
+            for n in 0..16 {
+                peer.send(Frame::Request(WireRequest {
+                    id: n.to_string(),
+                    method: "held".into(),
+                    params: None,
+                }))
+                .await
+                .unwrap();
+            }
+            let admitted = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                while active.load(std::sync::atomic::Ordering::SeqCst) != 16 {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await;
+            let closed = if admitted.is_ok() {
+                peer.send(Frame::Request(WireRequest {
+                    id: "overflow".into(),
+                    method: "held".into(),
+                    params: None,
+                }))
+                .await
+                .unwrap();
+                tokio::time::timeout(std::time::Duration::from_secs(2), task)
+                    .await
+                    .is_ok()
+            } else {
+                false
+            };
+            let observed = active.load(std::sync::atomic::Ordering::SeqCst);
+            *gate.0.lock().unwrap() = true;
+            gate.1.notify_all();
+            assert!(admitted.is_ok() && closed);
+            assert_eq!(observed, 16);
+        }
+    }
 }
