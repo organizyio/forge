@@ -19,3 +19,5 @@ pub struct ErrorPayload {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub detail: String,
 }
+
+pub use envelope::SequencedEvent;

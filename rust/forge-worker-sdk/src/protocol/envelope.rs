@@ -35,3 +35,12 @@ pub struct WireEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<Value>,
 }
+
+/// Additive reliable-event envelope; existing event fields and frame kind are unchanged.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SequencedEvent {
+    #[serde(flatten)]
+    pub event: WireEvent,
+    pub delivery_id: String,
+    pub sequence: u64,
+}

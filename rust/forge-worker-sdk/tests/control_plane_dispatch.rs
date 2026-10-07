@@ -75,7 +75,10 @@ async fn capabilities_reflect_handler() {
     let p = r.payload.expect("payload");
     assert_eq!(p.get("protocol_version"), Some(&json!(1)));
     assert_eq!(p.get("version"), Some(&json!("9.9.9-test")));
-    assert_eq!(p.get("features"), Some(&json!(["test.stub"])));
+    assert_eq!(
+        p.get("features"),
+        Some(&json!(["test.stub", "reliable_events_v1"]))
+    );
     assert_eq!(p.get("max_concurrent_jobs"), Some(&json!(1)));
     assert_eq!(p.get("encoding"), Some(&json!("msgpack")));
 }

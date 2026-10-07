@@ -35,16 +35,21 @@ type WireResponse struct {
 }
 
 type wireEvent struct {
-	Type    string          `msgpack:"type"    json:"type"`
-	JobID   string          `msgpack:"job_id"  json:"job_id"`
-	Payload json.RawMessage `msgpack:"payload" json:"payload,omitempty"`
+	Type       string          `msgpack:"type"    json:"type"`
+	JobID      string          `msgpack:"job_id"  json:"job_id"`
+	Payload    json.RawMessage `msgpack:"payload" json:"payload,omitempty"`
+	DeliveryID string          `msgpack:"delivery_id" json:"delivery_id,omitempty"`
+	Sequence   uint64          `msgpack:"sequence" json:"sequence,omitempty"`
 }
 
 // Event is a push notification from a worker connection.
 type Event struct {
-	Type    string
-	JobID   string
-	RawBody json.RawMessage
+	Type       string
+	JobID      string
+	RawBody    json.RawMessage
+	DeliveryID string
+	Sequence   uint64
+	WireBytes  int
 }
 
 // ErrorPayload carries a structured RPC error.
@@ -76,14 +81,19 @@ func (e Encoding) codecFormat() codec.Format {
 // Unix, or on Windows either a named pipe (address like \\.\pipe\Name or //./pipe/Name)
 // or an AF_UNIX path when supported.
 type Conn struct {
-	nc        net.Conn
-	mu        sync.Mutex
-	encoding  Encoding
-	pending   sync.Map // map[string]chan *WireResponse
-	onEvent   func(ev *Event)
-	seq       atomic.Uint64
-	closed    chan struct{}
-	closeOnce sync.Once
+	nc           net.Conn
+	mu           sync.Mutex
+	encoding     Encoding
+	pending      sync.Map // map[string]chan *WireResponse
+	onEvent      func(ev *Event)
+	seq          atomic.Uint64
+	closed       chan struct{}
+	closeOnce    sync.Once
+	reliableMu   sync.Mutex
+	reliable     *ReliableSubscription
+	eventOnce    sync.Once
+	legacyEvents chan *Event
+	dropped      atomic.Uint64
 }
 
 // Dial opens a connection to a worker (see Conn) and starts the read loop.
@@ -100,7 +110,15 @@ func Dial(ctx context.Context, socketPath string, encoding Encoding, onEvent fun
 
 // Close shuts down the connection.
 func (c *Conn) Close() error {
-	c.closeOnce.Do(func() { close(c.closed) })
+	c.closeOnce.Do(func() {
+		close(c.closed)
+		c.reliableMu.Lock()
+		s := c.reliable
+		c.reliableMu.Unlock()
+		if s != nil {
+			s.fail(ErrDeliveryInterrupted)
+		}
+	})
 	return c.nc.Close()
 }
 
@@ -155,7 +173,7 @@ func (c *Conn) readLoop() {
 
 func (c *Conn) handleResponse(body []byte) {
 	var resp WireResponse
-	if err := codec.Unmarshal(c.encoding.codecFormat(), body, &resp); err != nil {
+	if err := c.decodeEnvelope(body, &resp); err != nil {
 		return
 	}
 	if ch, ok := c.pending.Load(resp.ID); ok {
@@ -164,12 +182,70 @@ func (c *Conn) handleResponse(body []byte) {
 }
 
 func (c *Conn) handleEvent(body []byte) {
+	var ev wireEvent
+	if err := c.decodeEnvelope(body, &ev); err != nil {
+		_ = c.Close()
+		return
+	}
+	event := &Event{Type: ev.Type, JobID: ev.JobID, RawBody: ev.Payload, DeliveryID: ev.DeliveryID, Sequence: ev.Sequence, WireBytes: len(body)}
+	if ev.DeliveryID != "" {
+		c.reliableMu.Lock()
+		subscription := c.reliable
+		c.reliableMu.Unlock()
+		if subscription == nil || !subscription.accept(event) {
+			_ = c.Close()
+		}
+		return
+	}
 	if c.onEvent == nil {
 		return
 	}
-	var ev wireEvent
-	if err := codec.Unmarshal(c.encoding.codecFormat(), body, &ev); err != nil {
-		return
+	c.eventOnce.Do(func() {
+		c.legacyEvents = make(chan *Event, 256)
+		go func() {
+			for {
+				select {
+				case <-c.closed:
+					for {
+						select {
+						case event := <-c.legacyEvents:
+							c.onEvent(event)
+						default:
+							return
+						}
+					}
+				case event := <-c.legacyEvents:
+					c.onEvent(event)
+				}
+			}
+		}()
+	})
+	select {
+	case c.legacyEvents <- event:
+	default:
+		c.dropped.Add(1)
 	}
-	go c.onEvent(&Event{Type: ev.Type, JobID: ev.JobID, RawBody: ev.Payload})
+}
+
+// DroppedEvents counts legacy best-effort callback overflow.
+func (c *Conn) DroppedEvents() uint64 { return c.dropped.Load() }
+
+// Rust emits structured MessagePack payloads, while older Go embeddings emitted
+// JSON bytes. Normalize both forms at the transport boundary.
+func (c *Conn) decodeEnvelope(body []byte, target any) error {
+	if c.encoding == EncodingJSON {
+		return json.Unmarshal(body, target)
+	}
+	var envelope map[string]any
+	if err := codec.Unmarshal(codec.FormatMsgpack, body, &envelope); err != nil {
+		return err
+	}
+	if payload, ok := envelope["payload"].([]byte); ok {
+		envelope["payload"] = json.RawMessage(payload)
+	}
+	normalized, err := json.Marshal(envelope)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(normalized, target)
 }

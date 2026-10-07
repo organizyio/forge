@@ -130,3 +130,62 @@ func TestCrashRestartsAndStopDuringBackoff(t *testing.T) {
 		t.Fatal("unexpected crash did not restart")
 	}
 }
+
+func TestReliableEventsAcrossCreditWindow(t *testing.T) {
+	for _, encoding := range []forge.Encoding{forge.EncodingJSON, forge.EncodingMsgpack} {
+		t.Run(fmt.Sprint(encoding), func(t *testing.T) {
+			bin := os.Getenv("FORGE_MINIMAL_WORKER")
+			if bin == "" {
+				t.Fatal("FORGE_MINIMAL_WORKER required")
+			}
+			dir, err := os.MkdirTemp("", "fg-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer os.RemoveAll(dir)
+			socket := filepath.Join(dir, "w.sock")
+			if runtime.GOOS == "windows" {
+				socket = fmt.Sprintf(`\\.\pipe\forge-events-%d-%d`, os.Getpid(), encoding)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			w := forge.NewWorkerProcess(0, forge.WorkerConfig{BinaryPath: bin, SocketPath: socket, Encoding: encoding})
+			defer w.Stop(context.Background())
+			if err := w.Start(ctx); err != nil {
+				t.Fatal(err)
+			}
+			conn, ok := w.Client().Conn().(*forge.Conn)
+			if !ok {
+				t.Fatal("missing connection")
+			}
+			stream, err := conn.ConfigureReliable(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := conn.Call(ctx, "example_events", map[string]int{"count": 300})
+			if err != nil || !response.OK {
+				t.Fatalf("start: %v", err)
+			}
+			for i := 1; i <= 300; i++ {
+				select {
+				case ev, ok := <-stream.Events():
+					if !ok {
+						t.Fatalf("closed: %v", stream.Err())
+					}
+					if ev.Sequence != uint64(i) {
+						t.Fatal("sequence gap")
+					}
+					if err := stream.Commit(ctx, ev); err != nil {
+						t.Fatal(err)
+					}
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+			}
+			count, bytes := stream.Stats()
+			if count != 0 || bytes != 0 {
+				t.Fatalf("retained credits %d %d", count, bytes)
+			}
+		})
+	}
+}

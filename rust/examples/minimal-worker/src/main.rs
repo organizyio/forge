@@ -43,10 +43,31 @@ impl WorkerHandler for MinimalHandler {
         &self,
         req_id: &str,
         method: &str,
-        _params: Option<Value>,
-        _event_tx: EventSender,
+        params: Option<Value>,
+        event_tx: EventSender,
         _registry: Arc<JobRegistry>,
     ) -> WireResponse {
+        if method == "example_events" {
+            let count = params
+                .and_then(|p| p.get("count").and_then(|v| v.as_u64()))
+                .unwrap_or(300)
+                .min(1000);
+            tokio::task::spawn_blocking(move || {
+                for index in 0..count {
+                    if event_tx
+                        .blocking_reliable(forge_worker_sdk::protocol::WireEvent {
+                            event_type: "record".into(),
+                            job_id: "example".into(),
+                            payload: Some(serde_json::json!({"index":index})),
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            });
+            return forge_worker_sdk::ok_response(req_id, serde_json::json!({"started":true}));
+        }
         unknown_method(req_id, method)
     }
 

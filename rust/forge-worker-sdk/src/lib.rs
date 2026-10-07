@@ -36,6 +36,7 @@
 //! - [`server`]       — `run_worker` entry point; Unix socket + Windows named pipe.
 //! - [`prelude`]      — `run_worker`, `WorkerHandler`, `Encoding`, `ErrorPayload` for quick imports.
 
+pub mod delivery;
 pub mod dispatcher;
 pub mod framing;
 pub mod job_registry;
