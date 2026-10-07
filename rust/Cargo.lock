@@ -155,7 +155,7 @@ dependencies = [
 
 [[package]]
 name = "forge-worker-sdk"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "anyhow",
  "bytes",

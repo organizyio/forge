@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 Each release lists changes since the previous git tag (conventional-commit style groupings).
 
+## [v0.0.9] - 2026-10-07
+
+### Added
+- feat: add bounded opt-in reliable event delivery
+
+### Fixed
+- fix: coalesce progress and enforce socket write deadlines
+
+
 ## [v0.0.8] - 2026-10-07
 
 ### Fixed
