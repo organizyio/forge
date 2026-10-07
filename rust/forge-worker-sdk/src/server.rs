@@ -278,3 +278,57 @@ async fn handle_connection<R, W, H>(
     delivery.close();
     write_handle.abort();
 }
+
+#[cfg(test)]
+mod bounded_writer_tests {
+    use super::*;
+    use crate::job_registry::{EventSender, JobRegistry};
+    use crate::protocol::{WireRequest, WireResponse};
+    use serde_json::Value;
+
+    struct LargeResponse;
+    impl WorkerHandler for LargeResponse {
+        fn handle_method(
+            &self,
+            id: &str,
+            _: &str,
+            _: Option<Value>,
+            _: EventSender,
+            _: Arc<JobRegistry>,
+        ) -> WireResponse {
+            ok_response(id, serde_json::json!({"data": "x".repeat(32 * 1024)}))
+        }
+        fn worker_version(&self) -> &str {
+            "test"
+        }
+        fn features(&self) -> Vec<String> {
+            vec![]
+        }
+    }
+
+    #[tokio::test]
+    async fn stalled_reader_closes_within_write_deadline() {
+        for encoding in [Encoding::Json, Encoding::Msgpack] {
+            // A 64-byte duplex pipe forces the response write to block without
+            // allocating large buffers or exhausting machine memory.
+            let (client, server) = tokio::io::duplex(64);
+            let (reader, writer) = tokio::io::split(server);
+            let dispatcher = Arc::new(BaseDispatcher::new(LargeResponse, encoding));
+            let task = tokio::spawn(handle_connection(reader, writer, dispatcher, encoding));
+            let mut peer = Framed::new(client, FrameCodec::new(encoding));
+            peer.send(Frame::Request(WireRequest {
+                id: "blocked".into(),
+                method: "large".into(),
+                params: None,
+            }))
+            .await
+            .unwrap();
+            let started = std::time::Instant::now();
+            tokio::time::timeout(std::time::Duration::from_secs(7), task)
+                .await
+                .expect("stalled connection did not close")
+                .unwrap();
+            assert!(started.elapsed() >= std::time::Duration::from_secs(4));
+        }
+    }
+}
