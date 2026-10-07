@@ -138,7 +138,7 @@ func (c *Conn) writeFrame(kind uint8, payload []byte) error {
 }
 
 func (c *Conn) readLoop() {
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	for {
 		kind, body, err := frame.Read(c.nc)
 		if err != nil {
