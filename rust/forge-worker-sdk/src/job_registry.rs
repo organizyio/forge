@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{error, info};
+use tracing::info;
 
 use crate::protocol::WireEvent;
 
@@ -62,6 +62,8 @@ impl std::fmt::Display for JobState {
 pub struct JobStatus {
     pub job_id: String,
     pub state: String,
+    #[serde(default)]
+    pub cancel_requested: bool,
     /// Opaque product progress (e.g. scan counters); omitted when empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<Value>,
@@ -74,6 +76,7 @@ pub struct JobStatus {
 pub struct Job {
     pub job_id: String,
     pub state: JobState,
+    pub cancel_requested: bool,
     pub started_at: Instant,
     /// Latest product-specific progress snapshot for `job_status`.
     pub progress: Option<Value>,
@@ -89,6 +92,7 @@ impl Job {
         Self {
             job_id,
             state: JobState::Pending,
+            cancel_requested: false,
             started_at: Instant::now(),
             progress: None,
             error_msg: None,
@@ -99,10 +103,14 @@ impl Job {
 
     /// Signal cancellation.  Idempotent.
     pub fn cancel(&mut self) {
+        if self.state != JobState::Pending && self.state != JobState::Running {
+            return;
+        }
+        self.cancel_requested = true;
         if let Some(tok) = self.cancel.take() {
             let _ = tok.send(());
         }
-        if self.state == JobState::Running || self.state == JobState::Pending {
+        if self.state == JobState::Pending {
             self.state = JobState::Cancelled;
         }
     }
@@ -122,6 +130,15 @@ impl Job {
     pub fn duration_ms(&self) -> u64 {
         self.started_at.elapsed().as_millis() as u64
     }
+}
+
+/// Result of a guarded job lifecycle transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transition {
+    Accepted,
+    Duplicate,
+    Conflict,
+    Missing,
 }
 
 // ─── REGISTRY ────────────────────────────────────────────────────────────────
@@ -153,35 +170,79 @@ impl JobRegistry {
         Ok(())
     }
 
+    /// Attempts pending -> running without reviving cancelled work.
+    pub fn try_running(&self, job_id: &str) -> Transition {
+        let mut g = self.inner.lock().unwrap();
+        let Some(j) = g.jobs.get_mut(job_id) else {
+            return Transition::Missing;
+        };
+        if j.state == JobState::Running && !j.cancel_requested {
+            return Transition::Duplicate;
+        }
+        if j.state != JobState::Pending || j.cancel_requested {
+            return Transition::Conflict;
+        }
+        j.state = JobState::Running;
+        Transition::Accepted
+    }
+
     pub fn set_running(&self, job_id: &str) {
-        self.mutate(job_id, |j| j.state = JobState::Running);
+        self.try_running(job_id);
     }
 
+    pub fn complete(&self, job_id: &str, progress: Value) -> Transition {
+        self.finish(job_id, JobState::Completed, Some(progress), None)
+    }
+    pub fn fail(&self, job_id: &str, err: String) -> Transition {
+        self.finish(job_id, JobState::Failed, None, Some(err))
+    }
+    pub fn confirm_cancelled(&self, job_id: &str) -> Transition {
+        self.finish(job_id, JobState::Cancelled, None, None)
+    }
     pub fn set_completed(&self, job_id: &str, progress: Value) {
-        let mut g = self.inner.lock().unwrap();
-        if let Some(j) = g.jobs.get_mut(job_id) {
-            j.state = JobState::Completed;
-            j.progress = Some(progress);
-            info!(job_id, duration_ms = j.duration_ms(), "job completed");
-        }
-        g.total_completed += 1;
+        self.complete(job_id, progress);
+    }
+    pub fn set_failed(&self, job_id: &str, err: String) {
+        self.fail(job_id, err);
     }
 
-    pub fn set_failed(&self, job_id: &str, err: String) {
+    fn finish(
+        &self,
+        job_id: &str,
+        state: JobState,
+        progress: Option<Value>,
+        error: Option<String>,
+    ) -> Transition {
         let mut g = self.inner.lock().unwrap();
-        if let Some(j) = g.jobs.get_mut(job_id) {
-            j.state = JobState::Failed;
-            j.error_msg = Some(err.clone());
-            error!(job_id, error = %err, "job failed");
+        let Some(j) = g.jobs.get_mut(job_id) else {
+            return Transition::Missing;
+        };
+        if j.state == state {
+            return Transition::Duplicate;
         }
+        if !matches!(j.state, JobState::Pending | JobState::Running)
+            || (j.cancel_requested && state == JobState::Completed)
+        {
+            return Transition::Conflict;
+        }
+        j.state = state;
+        if progress.is_some() {
+            j.progress = progress;
+        }
+        j.error_msg = error;
         g.total_completed += 1;
+        Transition::Accepted
     }
 
     /// Cancel a running job.  Returns `true` if the job was found.
     pub fn cancel(&self, job_id: &str) -> bool {
         let mut g = self.inner.lock().unwrap();
         if let Some(j) = g.jobs.get_mut(job_id) {
+            let was_pending = j.state == JobState::Pending;
             j.cancel();
+            if was_pending && j.state == JobState::Cancelled {
+                g.total_completed += 1;
+            }
             true
         } else {
             false
@@ -189,7 +250,11 @@ impl JobRegistry {
     }
 
     pub fn update_progress(&self, job_id: &str, progress: Value) {
-        self.mutate(job_id, |j| j.progress = Some(progress));
+        self.mutate(job_id, |j| {
+            if matches!(j.state, JobState::Pending | JobState::Running) {
+                j.progress = Some(progress);
+            }
+        });
     }
 
     /// Forward an event to the connected client for `job_id`.
@@ -210,6 +275,7 @@ impl JobRegistry {
         g.jobs.get(job_id).map(|j| JobStatus {
             job_id: j.job_id.clone(),
             state: j.state.to_string(),
+            cancel_requested: j.cancel_requested,
             progress: j.progress.clone(),
             error: j.error_msg.clone().unwrap_or_default(),
         })
@@ -224,6 +290,7 @@ impl JobRegistry {
             .count() as u32
     }
 
+    /// Number of unique registered jobs reaching a terminal outcome, including cancellation.
     pub fn total_completed(&self) -> u64 {
         self.inner.lock().unwrap().total_completed
     }

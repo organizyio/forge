@@ -14,10 +14,11 @@ type Caller interface {
 
 // JobStatus is returned by the job_status RPC (matches forge-sdk JobStatus JSON).
 type JobStatus struct {
-	JobID    string          `json:"job_id"`
-	State    string          `json:"state"`
-	Progress json.RawMessage `json:"progress,omitempty"`
-	Error    string          `json:"error,omitempty"`
+	JobID           string          `json:"job_id"`
+	State           string          `json:"state"`
+	CancelRequested bool            `json:"cancel_requested"`
+	Progress        json.RawMessage `json:"progress,omitempty"`
+	Error           string          `json:"error,omitempty"`
 }
 
 // Client wraps a Caller with higher-level helpers.

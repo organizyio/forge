@@ -3,6 +3,8 @@
   "ok": true,
   "payload": {
     "cancelled": true,
-    "job_id": "job-123"
+    "job_id": "job-123",
+    "cancel_requested": true,
+    "state": "cancelled"
   }
 }
