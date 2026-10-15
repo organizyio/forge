@@ -28,7 +28,7 @@ class FixtureHandler:
         return "0.1.0"
 
     def features(self) -> list[str]:
-        return ["hash.xxh64"]
+        return ["hash.xxh64", "reliable_events_v1"]
 
     def max_concurrent_jobs(self) -> int:
         return 1

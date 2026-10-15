@@ -8,7 +8,7 @@ import time
 from typing import Any, Protocol, runtime_checkable
 
 from forge_worker_sdk.framing import Encoding
-from forge_worker_sdk.job_registry import JobRegistry
+from forge_worker_sdk.job_registry import JobRegistry, JobState
 from forge_worker_sdk.protocol import ErrorPayload, WireRequest, WireResponse
 
 DEFAULT_SHUTDOWN_DELAY_MS = 100
@@ -136,7 +136,17 @@ class BaseDispatcher:
         if method == "cancel_job":
             job_id = _str_param(params, "job_id")
             if self.registry.cancel(job_id):
-                return ok_response(rid, {"cancelled": True, "job_id": job_id})
+                st = self.registry.status(job_id)
+                state = st.state if st is not None else JobState.CANCELLED.value
+                return ok_response(
+                    rid,
+                    {
+                        "cancelled": True,
+                        "job_id": job_id,
+                        "cancel_requested": True,
+                        "state": state,
+                    },
+                )
             return err_response(rid, "JOB_NOT_FOUND", f"job {job_id} not found")
 
         if method == "job_status":

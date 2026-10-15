@@ -21,7 +21,9 @@ name: Release
 #   6. Runs GoReleaser in the same run (tag pushes with GITHUB_TOKEN do not
 #      trigger new workflow runs).
 #   7. Optionally publishes forge-worker-sdk to crates.io (PUBLISH_TO_CRATES_IO)
-#      and PyPI (PUBLISH_TO_PYPI; OIDC Trusted Publishing preferred).
+#      and PyPI (PUBLISH_TO_PYPI + secrets.PYPI_API_TOKEN via twine).
+#      Note: org action allowlist blocks pypa/gh-action-pypi-publish and
+#      astral-sh/setup-uv, so publish uses actions/setup-python + twine upload.
 #
 # Branch protection: if the default branch requires pull requests, the bot
 # commit in step 5 may fail unless github-actions[bot] is allowed to push, or
@@ -45,7 +47,6 @@ on:
 
 permissions:
   contents: write
-  id-token: write  # PyPI Trusted Publishing (OIDC)
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -59,9 +60,7 @@ jobs:
        github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      skip: ${{ steps.version.outputs.skip }}
+    environment: pypi
     steps:
       - uses: actions/checkout@v6
         with:
@@ -260,69 +259,29 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish -p forge-worker-sdk --locked
 
-  publish-pypi:
-    name: Publish forge-worker-sdk to PyPI
-    needs: prepare
-    if: |
-      always() &&
-      needs.prepare.result == 'success' &&
-      needs.prepare.outputs.skip == 'false' &&
-      vars.PUBLISH_TO_PYPI == 'true'
-    runs-on: ubuntu-latest
-    environment: pypi
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: v${{ needs.prepare.outputs.version }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install UV
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: "0.8.0"
-
-      - name: Build and check
+      - name: Build and publish forge-worker-sdk to PyPI
+        if: steps.version.outputs.skip != 'true' && vars.PUBLISH_TO_PYPI == 'true'
         working-directory: python
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: |
+          if [ -z "$TWINE_PASSWORD" ]; then
+            echo "::warning::PUBLISH_TO_PYPI=true but secrets.PYPI_API_TOKEN is empty; skipping PyPI upload."
+            echo "Add PYPI_API_TOKEN (org allowlist blocks pypa/gh-action-pypi-publish OIDC)."
+            exit 0
+          fi
+          python -m pip install --upgrade build twine
           rm -rf dist
-          uv pip install --system --upgrade build twine
           python -m build
           python -m twine check dist/*
-
-      - name: Check for PyPI API token
-        id: check-pypi-token
-        env:
-          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          if [ -n "$PYPI_API_TOKEN" ]; then
-            echo "has_token=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_token=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Publish to PyPI (token)
-        if: steps.check-pypi-token.outputs.has_token == 'true'
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: python/dist
-          password: ${{ secrets.PYPI_API_TOKEN }}
-          skip-existing: true
-
-      - name: Publish to PyPI (OIDC)
-        if: steps.check-pypi-token.outputs.has_token == 'false'
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: python/dist
-          skip-existing: true
+          python -m twine upload --skip-existing dist/*
 
   goreleaser:
     name: Create GitHub Release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    environment: pypi
     steps:
       - uses: actions/checkout@v6
         with:
@@ -368,57 +327,26 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish -p forge-worker-sdk --locked
 
-  publish-pypi-tag:
-    name: Publish forge-worker-sdk to PyPI (tag)
-    if: |
-      github.event_name == 'push' &&
-      startsWith(github.ref, 'refs/tags/v') &&
-      vars.PUBLISH_TO_PYPI == 'true'
-    runs-on: ubuntu-latest
-    environment: pypi
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up Python
+      - name: Set up Python (PyPI)
+        if: vars.PUBLISH_TO_PYPI == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install UV
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: "0.8.0"
-
-      - name: Build and check
+      - name: Build and publish forge-worker-sdk to PyPI
+        if: vars.PUBLISH_TO_PYPI == 'true'
         working-directory: python
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: |
+          if [ -z "$TWINE_PASSWORD" ]; then
+            echo "PUBLISH_TO_PYPI=true but secrets.PYPI_API_TOKEN is empty." >&2
+            echo "Set a PyPI API token (org allowlist blocks pypa/gh-action-pypi-publish OIDC)." >&2
+            exit 1
+          fi
+          python -m pip install --upgrade build twine
           rm -rf dist
-          uv pip install --system --upgrade build twine
           python -m build
           python -m twine check dist/*
-
-      - name: Check for PyPI API token
-        id: check-pypi-token
-        env:
-          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          if [ -n "$PYPI_API_TOKEN" ]; then
-            echo "has_token=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_token=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Publish to PyPI (token)
-        if: steps.check-pypi-token.outputs.has_token == 'true'
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: python/dist
-          password: ${{ secrets.PYPI_API_TOKEN }}
-          skip-existing: true
-
-      - name: Publish to PyPI (OIDC)
-        if: steps.check-pypi-token.outputs.has_token == 'false'
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: python/dist
-          skip-existing: true
+          python -m twine upload --skip-existing dist/*

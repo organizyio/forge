@@ -77,7 +77,7 @@ type WorkerConfig struct {
 	// Env, when non-empty, is appended to os.Environ() for the child.
 	Env []string
 	// Dir is the child working directory when non-empty.
-	Dir string
+	Dir      string
 	SourceID string
 	// SocketDir is joined with forge-worker-<id>.sock when SocketPath is empty.
 	SocketDir string

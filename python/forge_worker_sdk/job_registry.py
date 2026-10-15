@@ -26,9 +26,14 @@ class JobStatus:
     state: str
     progress: Any = None
     error: str = ""
+    cancel_requested: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        d: dict[str, Any] = {"job_id": self.job_id, "state": self.state}
+        d: dict[str, Any] = {
+            "job_id": self.job_id,
+            "state": self.state,
+            "cancel_requested": self.cancel_requested,
+        }
         if self.progress is not None:
             d["progress"] = self.progress
         if self.error:
@@ -134,6 +139,7 @@ class JobRegistry:
                 state=j.state.value,
                 progress=j.progress,
                 error=j.error_msg or "",
+                cancel_requested=j.cancel_event.is_set(),
             )
 
     def active_count(self) -> int:
