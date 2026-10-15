@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 Each release lists changes since the previous git tag (conventional-commit style groupings).
 
+## [v0.0.11] - 2026-10-15
+
+### Added
+- feat: Python worker SDK, multi-language foundation, and PyPI release wiring
+
+### Fixed
+- fix(release): use twine for PyPI under org action allowlist
+
+
 ## [v0.0.10] - 2026-10-07
 
 ### Changed
