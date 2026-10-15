@@ -1,6 +1,13 @@
 package forge
 
-import "context"
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+)
+
+// ErrNoHealthyWorker is returned when no worker in the pool reports healthy.
+var ErrNoHealthyWorker = errors.New("forge: no healthy worker")
 
 // PoolConfig configures a logical pool of worker processes.
 type PoolConfig struct {
@@ -11,6 +18,7 @@ type PoolConfig struct {
 // or start/stop them as a group.
 type Pool struct {
 	workers []*WorkerProcess
+	rr      atomic.Uint64
 }
 
 // NewPool constructs a pool from the given workers.
@@ -52,4 +60,33 @@ func (p *Pool) Stop(ctx context.Context) {
 			w.Stop(ctx)
 		}
 	}
+}
+
+// PickHealthy returns the first healthy worker in slice order.
+func (p *Pool) PickHealthy() (*WorkerProcess, error) {
+	if p == nil {
+		return nil, ErrNoHealthyWorker
+	}
+	for _, w := range p.workers {
+		if w != nil && w.IsHealthy() {
+			return w, nil
+		}
+	}
+	return nil, ErrNoHealthyWorker
+}
+
+// NextHealthy returns the next healthy worker using round-robin among the pool slice.
+func (p *Pool) NextHealthy() (*WorkerProcess, error) {
+	if p == nil || len(p.workers) == 0 {
+		return nil, ErrNoHealthyWorker
+	}
+	n := len(p.workers)
+	start := int(p.rr.Add(1) - 1)
+	for i := 0; i < n; i++ {
+		w := p.workers[(start+i)%n]
+		if w != nil && w.IsHealthy() {
+			return w, nil
+		}
+	}
+	return nil, ErrNoHealthyWorker
 }

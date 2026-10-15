@@ -55,6 +55,27 @@ pub async fn run_worker<H: WorkerHandler>(
     serve(socket_path, dispatcher, encoding).await
 }
 
+/// Serve framed IPC on stdin/stdout. Logging must use stderr only.
+pub async fn run_worker_stdio<H: WorkerHandler>(
+    handler: H,
+    encoding: Encoding,
+) -> anyhow::Result<()> {
+    let dispatcher = Arc::new(BaseDispatcher::new(handler, encoding));
+    let gc_reg = dispatcher.registry.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            tick.tick().await;
+            gc_reg.gc(50);
+        }
+    });
+
+    let stdin = tokio::io::stdin();
+    let stdout = tokio::io::stdout();
+    handle_connection(stdin, stdout, dispatcher, encoding).await;
+    Ok(())
+}
+
 // ─── PLATFORM DISPATCH ───────────────────────────────────────────────────────
 
 async fn serve<H: WorkerHandler>(

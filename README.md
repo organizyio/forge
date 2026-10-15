@@ -4,10 +4,11 @@
 ![Go Version](https://img.shields.io/badge/go-1.26.2+-blue.svg)
 [![crates.io](https://img.shields.io/crates/v/forge-worker-sdk.svg)](https://crates.io/crates/forge-worker-sdk)
 [![docs.rs](https://docs.rs/forge-worker-sdk/badge.svg)](https://docs.rs/forge-worker-sdk)
+[![PyPI](https://img.shields.io/pypi/v/forge-worker-sdk.svg)](https://pypi.org/project/forge-worker-sdk/)
 [![CI](https://github.com/organizyio/forge/actions/workflows/ci.yml/badge.svg)](https://github.com/organizyio/forge/actions/workflows/ci.yml)
 [![Release](https://github.com/organizyio/forge/actions/workflows/release.yml/badge.svg)](https://github.com/organizyio/forge/actions/workflows/release.yml)
 
-Local **Go ↔ Rust** worker IPC: length-prefixed frames, MessagePack or JSON, control-plane RPCs (`ping`, `health`, `capabilities`, `shutdown`, `cancel_job`, `job_status`), and optional progress **events**.
+Local **Go ↔ Rust/Python** worker IPC: length-prefixed frames, MessagePack or JSON, control-plane RPCs (`ping`, `health`, `capabilities`, `shutdown`, `cancel_job`, `job_status`), and optional progress **events**. Socket/pipe or framed **stdio** transport.
 
 This directory is the **framework** used by products such as Organizy (`organizy/daemon` + `organizy-worker`). It stays domain-agnostic.
 
@@ -19,8 +20,9 @@ This directory is the **framework** used by products such as Organizy (`organizy
 |------|----------|
 | `go/` | Go module `github.com/organizyio/forge/go` — package **`forge`**: `Conn`, `Client`, `WorkerProcess`, `Pool`, `ExtractEmbedded`, `ChannelEventBus` |
 | `rust/` | Cargo workspace: **`forge-worker-sdk`** crate at `rust/forge-worker-sdk/` (no `crates/` nesting), `examples/minimal-worker` |
+| `python/` | Python package **`forge_worker_sdk`**, `examples/minimal-python-worker`, pytest contract tests |
 | `protocol/` | Version `VERSION`, JSON fixtures, `spec.md`, `tools/gen_spec.py` |
-| `docs/` | `forge-implementation-spec.md`, `worker-framework-reference.md`, `go-client.md`, `rust-worker.md` |
+| `docs/` | Implementation guides + `python-worker.md`; non-canonical `plans/`, `adr/`, `specs/` |
 | `scripts/` | `release.sh` (pre-tag checks), `gen-fixtures.sh` (regenerate `protocol/spec.md` from fixtures + run contract tests) |
 
 ## Installation
@@ -29,9 +31,27 @@ This directory is the **framework** used by products such as Organizy (`organizy
 go get github.com/organizyio/forge/go@latest
 ```
 
-Rust: add `forge-worker-sdk` from this repo (path or git) or from [crates.io](https://crates.io/crates/forge-worker-sdk) once published. Import as `forge_worker_sdk` in code.
+Rust: add `forge-worker-sdk` from [crates.io](https://crates.io/crates/forge-worker-sdk) (or path/git). Import as `forge_worker_sdk` in code.
+
+Python:
+
+```bash
+pip install forge-worker-sdk
+# or
+uv add forge-worker-sdk
+```
+
+From source (contrib / tests): `cd python && pip install -e ".[dev]" && FORGE_WORKER_TEST=1 pytest`.
 
 ## Getting started (real APIs)
+
+### Python worker
+
+```bash
+python3 python/examples/minimal-python-worker/main.py --socket /tmp/forge-py.sock --encoding json
+```
+
+See [`docs/python-worker.md`](docs/python-worker.md).
 
 ### Rust worker
 
@@ -118,6 +138,15 @@ Follow [Publishing on crates.io](https://doc.rust-lang.org/cargo/reference/publi
 1. Set repository variable **`PUBLISH_TO_CRATES_IO`** to `true`.
 2. Add secret **`CARGO_REGISTRY_TOKEN`** (the crates.io API token).
 3. The release workflow runs `cargo publish -p forge-worker-sdk --locked` after GoReleaser when the variable is set.
+
+## Planning
+
+Historical multi-language foundation plan (phases **Done**; behavior in implementation-spec):
+
+- **Foundation plan:** [`docs/plans/2026-10-15-multi-language-foundation-plan.md`](docs/plans/2026-10-15-multi-language-foundation-plan.md)
+- **Plans index:** [`docs/plans/README.md`](docs/plans/README.md)
+- **ADR:** [`docs/adr/0001-framework-boundary.md`](docs/adr/0001-framework-boundary.md)
+- **Phase specs:** [`docs/specs/`](docs/specs/)
 
 ## Specification
 

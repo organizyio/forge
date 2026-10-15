@@ -32,9 +32,14 @@ forge/
 │   └── examples/
 │       └── minimal-worker/ # minimal WorkerHandler + run_worker CLI example
 ├── docs/
+│   ├── plans/              # non-canonical execution plans
+│   ├── adr/                # architecture decisions
+│   └── specs/              # target phase specs (not implementation truth)
 ├── scripts/
 └── Makefile
 ```
+
+Python SDK: `python/forge_worker_sdk/` — see [python-worker.md](python-worker.md).
 
 ## Runtime Flow
 
@@ -54,9 +59,9 @@ flowchart TD
 
 ## Compatibility Matrix (initial)
 
-| Protocol | Go SDK | Rust crate |
-|----------|--------|------------|
-| 1.0      | 0.1.x  | forge-worker-sdk 0.1.x |
+| Protocol | Go SDK | Rust crate | Python SDK |
+|----------|--------|------------|------------|
+| 1.0      | 0.1.x  | forge-worker-sdk 0.1.x | forge_worker_sdk 0.1.0 |
 
 ## Key Design Decisions
 
@@ -74,3 +79,5 @@ Forge does not ship product workers in this repository. Use an external example/
 
 - Go: `import forge "github.com/organizyio/forge/go"` (alias required: path ends with `go`).
 - Rust SDK crate: `forge-worker-sdk` from `rust/forge-worker-sdk` (under `forge/rust`); import as `forge_worker_sdk`
+
+Planning (non-canonical): [plans/README.md](plans/README.md), [ADR-0001](adr/0001-framework-boundary.md).

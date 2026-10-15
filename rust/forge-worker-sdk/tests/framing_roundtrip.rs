@@ -2,7 +2,7 @@
 
 use bytes::{BufMut, BytesMut};
 use forge_worker_sdk::framing::{Encoding, Frame, FrameCodec};
-use forge_worker_sdk::protocol::{WireRequest, WireResponse};
+use forge_worker_sdk::protocol::{WireEvent, WireRequest, WireResponse};
 use forge_worker_sdk::MAX_FRAME_PAYLOAD;
 use futures::{SinkExt, StreamExt};
 use tokio::io::duplex;
@@ -84,4 +84,22 @@ fn decode_rejects_oversized_length() {
     let mut codec = FrameCodec::json();
     let err = codec.decode(&mut buf).unwrap_err();
     assert!(err.to_string().contains("too large"));
+}
+
+#[tokio::test]
+async fn json_event_roundtrip_matches_fixture_shape() {
+    let (a, b) = duplex(64 * 1024);
+    let mut send = Framed::new(a, FrameCodec::new(Encoding::Json));
+    let mut recv = Framed::new(b, FrameCodec::new(Encoding::Json));
+    let ev = WireEvent {
+        event_type: "progress".into(),
+        job_id: "job-123".into(),
+        payload: Some(serde_json::json!({"n": 1, "phase": "demo"})),
+    };
+    send.send(Frame::Event(ev.clone())).await.unwrap();
+    let frame = recv.next().await.unwrap().unwrap();
+    match frame {
+        Frame::Event(got) => assert_eq!(got, ev),
+        other => panic!("expected Event, got {:?}", other),
+    }
 }

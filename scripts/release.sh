@@ -35,6 +35,13 @@ echo "==> cargo build -p minimal-worker"
 echo "==> go test -tags=integration (go/tests/integration)"
 (cd go && go test -tags=integration -timeout 120s -count=1 ./tests/integration/...)
 
+echo "==> python worker SDK tests"
+(
+  cd python
+  python3 -m pip install -e ".[dev]"
+  FORGE_WORKER_TEST=1 pytest -q
+)
+
 echo
 echo "All checks passed."
 echo "Next: use GitHub Actions → Release (workflow_dispatch), wait for post-CI auto patch bump, or: git tag vX.Y.Z && git push origin vX.Y.Z"

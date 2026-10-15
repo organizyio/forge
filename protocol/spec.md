@@ -14,13 +14,15 @@ Built-in methods implemented by `BaseDispatcher` in the Rust SDK include: `ping`
 
 ## Fixtures (`fixtures/`)
 
-JSON files under [`fixtures/`](fixtures/) are the **contract** for control-plane request/response shapes. CI runs [`forge/rust/forge-worker-sdk/tests/protocol_fixtures.rs`](../rust/forge-worker-sdk/tests/protocol_fixtures.rs), which loads each fixture, dispatches through [`BaseDispatcher`](../rust/forge-worker-sdk/src/dispatcher.rs), and compares the result to the expected JSON (with `uptime_secs` and `pid` stripped for `health`).
+JSON files under [`fixtures/`](fixtures/) are the **contract** for control-plane request/response shapes. They are language-neutral: every worker SDK must honor them.
+
+**Consumers:** Rust [`protocol_fixtures.rs`](../rust/forge-worker-sdk/tests/protocol_fixtures.rs) and Python [`python/tests/test_protocol_fixtures.py`](../python/tests/test_protocol_fixtures.py) load each control-plane fixture, dispatch through `BaseDispatcher`, and compare JSON (with `uptime_secs` and `pid` stripped for `health`). A generic event shape example lives in `fixtures/event-example.json` (not an RPC catalog entry).
 
 ## Maintaining the protocol (fixtures-first)
 
 1. **Change fixtures first** — add or edit JSON under [`fixtures/`](fixtures/) before changing implementation (test-driven).
 2. **Regenerate the generated section below** — from the `forge` directory run `make protocol-spec`, or `python3 protocol/tools/gen_spec.py`.
-3. **Implement** — update [`dispatcher.rs`](../rust/forge-worker-sdk/src/dispatcher.rs) and Go [`conn.go`](../go/conn.go) / codec until `cargo test -p forge-worker-sdk` and `go test ./...` pass.
+3. **Implement** — update Rust/Python dispatchers and Go [`conn.go`](../go/conn.go) / codec until `cargo test -p forge-worker-sdk`, `pytest` under `python/`, and `go test ./...` pass.
 
 **Fixture naming**
 

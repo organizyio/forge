@@ -4,6 +4,7 @@
 //! Run (Unix):
 //! ```text
 //! cargo run -p minimal-worker -- --socket /tmp/forge-minimal.sock --encoding json
+//! cargo run -p minimal-worker -- --stdio --encoding json
 //! ```
 
 use std::sync::Arc;
@@ -14,7 +15,7 @@ use forge_worker_sdk::{
     framing::Encoding,
     job_registry::{EventSender, JobRegistry},
     protocol::WireResponse,
-    run_worker,
+    run_worker, run_worker_stdio,
 };
 use serde_json::Value;
 use tracing_subscriber::EnvFilter;
@@ -34,6 +35,10 @@ struct Args {
 
     #[arg(long, default_value = "msgpack")]
     encoding: String,
+
+    /// Serve framed IPC on stdin/stdout instead of --socket.
+    #[arg(long, default_value_t = false)]
+    stdio: bool,
 }
 
 struct MinimalHandler;
@@ -83,12 +88,20 @@ impl WorkerHandler for MinimalHandler {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&args.log_level)),
-        )
-        .init();
+    // Stdio mode: keep tracing off stdout (protocol stream).
+    let subscriber = tracing_subscriber::fmt().with_env_filter(
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&args.log_level)),
+    );
+    if args.stdio {
+        subscriber.with_writer(std::io::stderr).init();
+    } else {
+        subscriber.init();
+    }
 
     let encoding: Encoding = args.encoding.parse().unwrap();
-    run_worker(&args.socket, MinimalHandler, encoding).await
+    if args.stdio {
+        run_worker_stdio(MinimalHandler, encoding).await
+    } else {
+        run_worker(&args.socket, MinimalHandler, encoding).await
+    }
 }

@@ -1,6 +1,6 @@
 # Forge — Implementation specification (code-accurate)
 
-This document describes the **Forge worker IPC stack as implemented** in this repository (`forge/go`, `forge/rust/forge-worker-sdk`, `forge/protocol`). It is not a product roadmap: if something is not listed here, it is **not** part of the current SDK unless noted as “reserved / unused”.
+This document describes the **Forge worker IPC stack as implemented** in this repository (`forge/go`, `forge/rust/forge-worker-sdk`, `forge/python/forge_worker_sdk`, `forge/protocol`). It is not a product roadmap: if something is not listed here, it is **not** part of the current SDK unless noted as “reserved / unused”.
 
 **Canonical protocol version:** `1.0` — see [`forge/protocol/VERSION`](../protocol/VERSION).
 
@@ -8,6 +8,7 @@ This document describes the **Forge worker IPC stack as implemented** in this re
 
 - Go: `github.com/organizyio/forge/go` — single import path; package name **`forge`** (use `import forge "github.com/organizyio/forge/go"` if needed).
 - Rust: crate **`forge_worker_sdk`** (package `forge-worker-sdk`) in `forge/rust/forge-worker-sdk`.
+- Python: package **`forge_worker_sdk`** in `forge/python/forge_worker_sdk`.
 
 ---
 
@@ -108,6 +109,7 @@ Product methods fall through to `WorkerHandler::handle_method`; unknown methods 
 ### 5.1 `Conn`
 
 - **`Dial(ctx, socketPath, encoding, onEvent)`** — On Unix, Unix domain socket. On Windows, if `socketPath` is a named pipe (`\\.\pipe\...`, `\\?\pipe\...`, or slash form after normalization), dials via `go-winio`; otherwise `net.Dial("unix", ...)` for AF_UNIX when available.
+- **`DialReadWriter(r, w, encoding, onEvent)`** — framed IPC over arbitrary half-duplex streams (used for stdio workers).
 - **`Call(ctx, method, params)`** — sends request frame, waits for matching response id or context cancel / connection close.
 - **`Close()`** — closes net conn; read loop exits.
 - Read loop handles **response** and **event** frames only (request frames from worker are not expected on this client).
@@ -121,16 +123,16 @@ Wraps a `Caller` (typically `*Conn`):
 
 ### 5.3 `WorkerProcess` (`NewWorkerProcess`)
 
-- Spawns:  
-  `binaryPath --socket <path> --source-id <sourceID> --log-level <level> --encoding <msgpack|json>`
-- Socket path: if **`WorkerConfig.SocketPath`** is set, that value is used (Unix filesystem socket or Windows named pipe, e.g. `\\.\pipe\...`); otherwise `filepath.Join(SocketDir, fmt.Sprintf("forge-worker-%d.sock", id))`.
-- Waits up to **10s** for readiness: on Windows named pipe paths, repeated **test dials** until the pipe accepts; otherwise **`os.Stat`** on the socket path. Then **`Dial`**, then **`Ping`** must succeed.
-- On process exit, **`supervise`** attempts up to **5** restarts with exponential backoff starting at **500 ms** (doubles each attempt), unless context is done.
+- Spawn argv: `BinaryPath` + `Args` + Forge flags. Socket mode flags: `--socket <path> --source-id <id> --log-level <level> --encoding <msgpack|json>`. Stdio mode: `--stdio` instead of `--socket` (same other flags).
+- **`WorkerConfig`**: `Args`, `Env` (appended to `os.Environ()` when non-empty), `Dir`, `Transport` (`TransportSocket` default / `TransportStdio`), `MaxRestarts` (0 → **5**), `InitialBackoff` (0 → **500 ms**).
+- Socket path: if **`WorkerConfig.SocketPath`** is set, that value is used; otherwise `filepath.Join(SocketDir, fmt.Sprintf("forge-worker-%d.sock", id))`.
+- Socket readiness: up to **10s** (`os.Stat` / pipe dial poll), then **`Dial`** + **`Ping`**. Stdio readiness: **`Ping`** within **10s** on the pipe pair (no socket wait).
+- On process exit, **`supervise`** retries up to `MaxRestarts` with exponential backoff from `InitialBackoff`, unless context is done.
 - **`Stop`**: best-effort `Shutdown` on client, `Close`, then **`Kill`** on child process.
 
 ### 5.4 `Pool` (`NewPool`)
 
-Holds `[]*WorkerProcess`. **`Start`/`Stop`** forward to each worker in order. **No** built-in load balancing, scheduling, or job queue.
+Holds `[]*WorkerProcess`. **`Start`/`Stop`** forward to each worker in order. **`PickHealthy`** returns the first healthy worker; **`NextHealthy`** round-robins among healthy workers. **No** persistent job queue or cross-host scheduler.
 
 ### 5.5 `ExtractEmbedded`
 
@@ -151,30 +153,45 @@ There is **no** `scheduler` package, **no** `metrics` hooks package, and **no** 
 | Symbol | Role |
 |--------|------|
 | `run_worker(socket_path, handler, encoding)` | Entry point: `BaseDispatcher` + **GC task** every **60 s** (`registry.gc(50)`), then platform listener loop. |
+| `run_worker_stdio(handler, encoding)` | Same protocol on stdin/stdout; logs must use stderr. |
 | `WorkerHandler` | `handle_method`, `worker_version`, `features`, optional `max_concurrent_jobs` (default **1**). |
 | `BaseDispatcher` | `new`, `dispatch` (async), public `registry: Arc<JobRegistry>`. |
 | `JobRegistry` | `register`, `cancel`, `status`, `active_count`, `set_running`, `update_progress`, `emit`, `gc`, etc. |
 | `FrameCodec` / `Frame` | Tokio codec; same length + kind + payload as Go. |
-| `server` | Unix: `interprocess` local socket; Windows: **named pipe** listener (`serve_windows`). |
+| `server` | Unix: `interprocess` local socket; Windows: **named pipe** listener (`serve_windows`); stdio via `run_worker_stdio`. |
 
-Worker CLI is **product-defined**. The reference example [`minimal-worker`](../rust/examples/minimal-worker/src/main.rs) accepts `--socket`, `--source-id` (ignored in the example), `--log-level`, and `--encoding` so it can be spawned by `WorkerProcess` without extra flags.
+Worker CLI is **product-defined**. The reference example [`minimal-worker`](../rust/examples/minimal-worker/src/main.rs) accepts `--socket` or `--stdio`, plus `--source-id`, `--log-level`, and `--encoding`.
+
+---
+
+## 6b. Python worker API (`forge_worker_sdk`)
+
+| Symbol | Role |
+|--------|------|
+| `run_worker(socket_path, handler, encoding)` | Unix domain socket listener (Windows named pipes **not** implemented). |
+| `run_worker_stdio(handler, encoding)` | Framed IPC on stdin/stdout via raw OS fds. |
+| `WorkerHandler` / `BaseDispatcher` / `JobRegistry` | Same control-plane methods as Rust; cooperative cancel via `threading.Event`. |
+
+Example: [`python/examples/minimal-python-worker`](../python/examples/minimal-python-worker). Contract tests: `python/` pytest against `protocol/fixtures/`.
 
 ---
 
 ## 7. Transport matrix
 
-| Platform | Rust listener | Go `Dial` in this repo |
-|----------|---------------|------------------------|
-| Unix | Unix domain socket (`socket_path` as filesystem path) | `unix` dial to same path |
-| Windows | Named pipe (`socket_path` as pipe path for `interprocess`) | Named pipe when address matches `\\.\pipe\...` (or `\\?\pipe\...` / `\??\pipe\...`); else AF_UNIX dial |
+| Platform | Rust listener | Python listener | Go dial / spawn |
+|----------|---------------|-----------------|-----------------|
+| Unix socket | filesystem path | filesystem path | `Dial` + `TransportSocket` |
+| Windows named pipe | `interprocess` pipe | — (not implemented) | named pipe `Dial` when path matches |
+| Stdio | `run_worker_stdio` | `run_worker_stdio` | `TransportStdio` + `DialReadWriter` |
 
-**Note:** On Windows named pipe paths, `WorkerProcess` uses dial polling for readiness instead of `os.Stat`; Unix socket paths still use `os.Stat`. Stale Unix socket files are removed before start and after stop; pipe paths are not passed to `os.Remove`.
+**Note:** On Windows named pipe paths, `WorkerProcess` uses dial polling for readiness instead of `os.Stat`; Unix socket paths still use `os.Stat`. Stale Unix socket files are removed before start and after stop; pipe paths are not passed to `os.Remove`. Keep AF_UNIX paths short on macOS (~104 byte limit).
 
 ---
 
 ## 8. Contract tests and generated docs
 
-- JSON fixtures: [`forge/protocol/fixtures/`](../protocol/fixtures/).
+- JSON fixtures: [`forge/protocol/fixtures/`](../protocol/fixtures/) (including `event-example.json` for kind-3 shape).
+- Consumers: Rust `protocol_fixtures.rs`, Python `tests/test_protocol_fixtures.py`.
 - Human + generated protocol doc: [`forge/protocol/spec.md`](../protocol/spec.md).
 - Spec generator: [`forge/protocol/tools/gen_spec.py`](../protocol/tools/gen_spec.py).
 
@@ -186,14 +203,19 @@ Worker CLI is **product-defined**. The reference example [`minimal-worker`](../r
 - Persistent job queue inside Forge.
 - gRPC / HTTP for worker IPC.
 - TLS on local sockets.
-- Go-side Windows pipe client matching Rust named-pipe server.
+- Python Windows named-pipe listener.
+- Product turn / Tool Router schemas inside Forge builtins.
 
 ---
 
 ## 10. Related reading
 
 - [`worker-framework-reference.md`](worker-framework-reference.md) — shorter architecture summary.
+- [`python-worker.md`](python-worker.md) — Python SDK guide.
 - Rust crate docs: `cargo doc -p forge-worker-sdk --open` from `forge/rust`.
+- Plans (non-canonical): [`plans/README.md`](plans/README.md), [2026-10-15-multi-language-foundation-plan.md](plans/2026-10-15-multi-language-foundation-plan.md).
+- ADR: [`adr/0001-framework-boundary.md`](adr/0001-framework-boundary.md).
+- Phase specs: [`specs/`](specs/).
 
 ---
 

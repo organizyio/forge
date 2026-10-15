@@ -14,14 +14,35 @@ import (
 	"time"
 )
 
+// Transport selects how the supervisor talks to the worker process.
+type Transport int
+
+const (
+	// TransportSocket uses a Unix socket or Windows named pipe (default).
+	TransportSocket Transport = iota
+	// TransportStdio uses framed IPC on the child stdin/stdout.
+	TransportStdio
+)
+
+const (
+	defaultMaxRestarts    = 5
+	defaultInitialBackoff = 500 * time.Millisecond
+)
+
 // WorkerProcess supervises a single worker subprocess and its RPC connection.
 type WorkerProcess struct {
 	id         int
 	socketPath string
 	binaryPath string
+	args       []string
+	env        []string
+	dir        string
 	sourceID   string
 	encoding   Encoding
 	logLevel   string
+	transport  Transport
+	maxRestart int
+	initBack   time.Duration
 	log        *slog.Logger
 
 	mu        sync.Mutex
@@ -50,7 +71,14 @@ type workerRun struct {
 // WorkerConfig configures a supervised worker process.
 type WorkerConfig struct {
 	BinaryPath string
-	SourceID   string
+	// Args are inserted after BinaryPath and before Forge control flags
+	// (--socket/--stdio, --source-id, --log-level, --encoding).
+	Args []string
+	// Env, when non-empty, is appended to os.Environ() for the child.
+	Env []string
+	// Dir is the child working directory when non-empty.
+	Dir string
+	SourceID string
 	// SocketDir is joined with forge-worker-<id>.sock when SocketPath is empty.
 	SocketDir string
 	// SocketPath, if non-empty, is the full listen address: a Unix socket filesystem
@@ -64,6 +92,12 @@ type WorkerConfig struct {
 	OnConnect func(context.Context, *Client) error
 	// Log receives process lifecycle messages. If nil, logs are discarded.
 	Log *slog.Logger
+	// Transport defaults to TransportSocket.
+	Transport Transport
+	// MaxRestarts is restart attempts after unexpected exit; 0 means default (5).
+	MaxRestarts int
+	// InitialBackoff is the first restart delay; 0 means default (500ms).
+	InitialBackoff time.Duration
 }
 
 // NewWorkerProcess constructs a worker supervisor for the given id and config.
@@ -81,13 +115,27 @@ func NewWorkerProcess(id int, cfg WorkerConfig) *WorkerProcess {
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	log = log.With(slog.Int("worker_id", id))
+	maxR := cfg.MaxRestarts
+	if maxR == 0 {
+		maxR = defaultMaxRestarts
+	}
+	backoff := cfg.InitialBackoff
+	if backoff == 0 {
+		backoff = defaultInitialBackoff
+	}
 	return &WorkerProcess{
 		id:         id,
 		socketPath: socketPath,
 		binaryPath: cfg.BinaryPath,
+		args:       append([]string(nil), cfg.Args...),
+		env:        append([]string(nil), cfg.Env...),
+		dir:        cfg.Dir,
 		sourceID:   cfg.SourceID,
 		encoding:   cfg.Encoding,
 		logLevel:   logLevel,
+		transport:  cfg.Transport,
+		maxRestart: maxR,
+		initBack:   backoff,
 		onEvent:    cfg.OnEvent,
 		onConnect:  cfg.OnConnect,
 		log:        log,
@@ -115,6 +163,15 @@ func (w *WorkerProcess) Start(ctx context.Context) error {
 	return nil
 }
 
+func (w *WorkerProcess) forgeFlags() []string {
+	enc := encodingFlag(w.encoding)
+	base := []string{"--source-id", w.sourceID, "--log-level", w.logLevel, "--encoding", enc}
+	if w.transport == TransportStdio {
+		return append([]string{"--stdio"}, base...)
+	}
+	return append([]string{"--socket", w.socketPath}, base...)
+}
+
 func (w *WorkerProcess) launch(r *workerRun) error {
 	w.mu.Lock()
 	if w.run != r || w.state == "stopping" || r.ctx.Err() != nil {
@@ -123,9 +180,65 @@ func (w *WorkerProcess) launch(r *workerRun) error {
 	}
 	w.cleanupSocket()
 	w.mu.Unlock()
-	cmd := exec.CommandContext(r.ctx, w.binaryPath, "--socket", w.socketPath, "--source-id", w.sourceID, "--log-level", w.logLevel, "--encoding", encodingFlag(w.encoding))
-	cmd.Stdout = os.Stderr
+
+	argv := append(append([]string{}, w.args...), w.forgeFlags()...)
+	cmd := exec.CommandContext(r.ctx, w.binaryPath, argv...)
+	if w.dir != "" {
+		cmd.Dir = w.dir
+	}
+	if len(w.env) > 0 {
+		cmd.Env = append(os.Environ(), w.env...)
+	}
 	cmd.Stderr = os.Stderr
+
+	if w.transport == TransportStdio {
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			return fmt.Errorf("stdin pipe: %w", err)
+		}
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return fmt.Errorf("stdout pipe: %w", err)
+		}
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("spawn worker: %w", err)
+		}
+		exited := make(chan struct{})
+		go func() { _ = cmd.Wait(); close(exited) }()
+		fail := func(err error) error { _ = cmd.Process.Kill(); <-exited; return err }
+		w.mu.Lock()
+		r.cmd = cmd
+		r.exited = exited
+		w.mu.Unlock()
+
+		conn := DialReadWriter(stdout, stdin, w.encoding, w.onEvent)
+		client := NewClient(conn)
+		ready, cancel := context.WithTimeout(r.ctx, 10*time.Second)
+		defer cancel()
+		if _, err = client.Ping(ready); err != nil {
+			_ = client.Close()
+			return fail(fmt.Errorf("worker ping: %w", err))
+		}
+		if w.onConnect != nil {
+			if err := w.onConnect(ready, client); err != nil {
+				_ = client.Close()
+				return fail(err)
+			}
+		}
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		if w.run != r || w.state == "stopping" || r.ctx.Err() != nil {
+			_ = client.Close()
+			return fail(context.Canceled)
+		}
+		r.client = client
+		w.client = client
+		w.state = "running"
+		w.healthy.Store(true)
+		return nil
+	}
+
+	cmd.Stdout = os.Stderr
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("spawn worker: %w", err)
 	}
@@ -223,8 +336,9 @@ func (w *WorkerProcess) supervise(r *workerRun) {
 			return
 		}
 		restarted := false
-		for i := 0; i < 5; i++ {
-			timer := time.NewTimer((500 * time.Millisecond) << i)
+		backoff := w.initBack
+		for i := 0; i < w.maxRestart; i++ {
+			timer := time.NewTimer(backoff)
 			select {
 			case <-r.stop:
 				timer.Stop()
@@ -234,6 +348,7 @@ func (w *WorkerProcess) supervise(r *workerRun) {
 				return
 			case <-timer.C:
 			}
+			backoff *= 2
 			if err := w.launch(r); err == nil {
 				restarted = true
 				break
@@ -242,6 +357,7 @@ func (w *WorkerProcess) supervise(r *workerRun) {
 			}
 		}
 		if !restarted {
+			w.log.Error("worker failed to restart after attempts", "max", w.maxRestart)
 			return
 		}
 	}
@@ -298,6 +414,9 @@ func (w *WorkerProcess) StopAndWait(ctx context.Context) error {
 }
 
 func (w *WorkerProcess) cleanupSocket() {
+	if w.transport == TransportStdio {
+		return
+	}
 	if !isWorkerPipePath(w.socketPath) {
 		_ = os.Remove(w.socketPath)
 	}

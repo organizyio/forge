@@ -4,9 +4,11 @@ The protocol version is tracked in `protocol/VERSION`.
 
 ## Version Matrix
 
-| Protocol | Go SDK | Rust `forge-worker-sdk` | `organizy-worker` |
-|----------|--------|------------------|--------------------|
-| 1.0 | 0.1.x | 0.1.x | 0.1.x |
+| Protocol | Go SDK | Rust `forge-worker-sdk` | Python `forge_worker_sdk` | `organizy-worker` |
+|----------|--------|-------------------------|---------------------------|--------------------|
+| 1.0 | 0.1.x | 0.1.x | 0.1.0 | 0.1.x |
+
+Python guide: [python-worker.md](python-worker.md).
 
 ## Release Rules
 

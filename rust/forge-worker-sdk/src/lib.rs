@@ -33,7 +33,7 @@
 //! - [`protocol`]     — `WireRequest` / `WireResponse` / `WireEvent` + control types.
 //! - [`job_registry`] — Thread-safe job tracking with cancel tokens and event routing.
 //! - [`dispatcher`]   — `WorkerHandler` trait + `BaseDispatcher` (control-plane handling).
-//! - [`server`]       — `run_worker` entry point; Unix socket + Windows named pipe.
+//! - [`server`]       — `run_worker` / `run_worker_stdio`; Unix socket, Windows pipe, or stdio.
 //! - [`prelude`]      — `run_worker`, `WorkerHandler`, `Encoding`, `ErrorPayload` for quick imports.
 
 pub mod delivery;
@@ -52,4 +52,4 @@ pub use framing::{
 pub use job_registry::{
     cancel_pair, CancelSignal, CancelToken, EventSender, JobRegistry, JobState, JobStatus,
 };
-pub use server::run_worker;
+pub use server::{run_worker, run_worker_stdio};

@@ -39,20 +39,25 @@ For **product methods** (not built into `Client`), use **`client.Conn()`** (a `C
 
 ## `WorkerProcess` (spawn + supervise)
 
-**`NewWorkerProcess`** runs:
+**`NewWorkerProcess`** runs `BinaryPath` + optional **`Args`**, then Forge flags:
 
-`binaryPath --socket <path> --source-id <id> --log-level <level> --encoding <msgpack|json>`
+- Socket: `--socket <path> --source-id <id> --log-level <level> --encoding <msgpack|json>`
+- Stdio: `--stdio` instead of `--socket` when **`Transport: TransportStdio`**
+
+Also: **`Env`** (append to process env), **`Dir`**, **`MaxRestarts`** / **`InitialBackoff`** (0 → defaults 5 / 500ms).
 
 - **Default socket path:** `filepath.Join(WorkerConfig.SocketDir, fmt.Sprintf("forge-worker-%d.sock", id))`.
-- **Override:** set **`WorkerConfig.SocketPath`** to a full Unix socket path or Windows pipe path; then `SocketDir` is not used for the listen address.
-- After start, Forge waits for readiness ( **`os.Stat`** on Unix socket files, **dial polling** on Windows named pipe paths), then **`Dial`** and **`Ping`**.
-- **`Stop`**: `Shutdown`, close client, kill child, remove stale Unix socket file when applicable (pipes are not removed with `os.Remove`).
+- **Override:** set **`WorkerConfig.SocketPath`** to a full Unix socket path or Windows pipe path.
+- Socket readiness: **`os.Stat`** / pipe dial poll, then **`Dial`** + **`Ping`**. Stdio: **`Ping`** on the pipe pair.
+- **`Stop`**: `Shutdown`, close client, kill child, remove stale Unix socket file when applicable.
 
 Use **`Client()`** only while the worker reports healthy; after a crash the supervisor may restart the child (see implementation spec).
 
+Example interpreted worker: `BinaryPath: "python3", Args: []string{"/path/to/main.py"}`.
+
 ## `Pool`
 
-**`NewPool`** holds `[]*WorkerProcess`. **`Start`** / **`Stop`** walk the slice in order. There is no built-in scheduler or queue inside Forge.
+**`NewPool`** holds `[]*WorkerProcess`. **`Start`** / **`Stop`** walk the slice in order. **`PickHealthy`** / **`NextHealthy`** select a healthy worker (first / round-robin). There is no built-in job queue inside Forge.
 
 ## Other exports
 
@@ -63,3 +68,5 @@ Use **`Client()`** only while the worker reports healthy; after a crash the supe
 
 - [forge-implementation-spec.md](forge-implementation-spec.md) — authoritative API list (Go supervisor section).
 - [README.md](../README.md) — layout and quick examples.
+- [python-worker.md](python-worker.md) — Python worker SDK.
+- [plans/2026-10-15-multi-language-foundation-plan.md](plans/2026-10-15-multi-language-foundation-plan.md) — multi-language foundation (Done).

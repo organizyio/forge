@@ -25,8 +25,25 @@ Implement **`forge_worker_sdk::dispatcher::WorkerHandler`**:
 
 Built-in control methods are handled by `BaseDispatcher` before your handler.
 
+## Stdio
+
+```rust
+run_worker_stdio(MyHandler, Encoding::Json).await?;
+```
+
+Use `--stdio` on [`minimal-worker`](../rust/examples/minimal-worker). Keep logs on stderr.
+
+## Long-running jobs
+
+Register a job, return the start RPC promptly, emit kind-3 events, honor cooperative cancel. See [streaming-cancel-spec.md](specs/streaming-cancel-spec.md).
+
+## Sibling SDKs
+
+Python peer: [python-worker.md](python-worker.md) (`forge/python`).
+
 ## See also
 
 - Example: [`rust/examples/minimal-worker`](../rust/examples/minimal-worker).
 - Contract tests: **`rust/forge-worker-sdk/tests/protocol_fixtures.rs`** (dispatch + compare; volatile keys like health timestamps may be stripped before assert).
 - Crate-level docs: `cargo doc -p forge-worker-sdk --open`.
+- Foundation plan: [plans/2026-10-15-multi-language-foundation-plan.md](plans/2026-10-15-multi-language-foundation-plan.md).

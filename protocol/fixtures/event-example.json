@@ -1,0 +1,8 @@
+{
+  "type": "progress",
+  "job_id": "job-123",
+  "payload": {
+    "n": 1,
+    "phase": "demo"
+  }
+}

@@ -29,6 +29,7 @@ jobs:
     outputs:
       go: ${{ steps.filter.outputs.go }}
       rust: ${{ steps.filter.outputs.rust }}
+      python: ${{ steps.filter.outputs.python }}
       protocol: ${{ steps.filter.outputs.protocol }}
       workflows: ${{ steps.filter.outputs.workflows }}
       scripts: ${{ steps.filter.outputs.scripts }}
@@ -54,7 +55,7 @@ jobs:
               paths = subprocess.check_output(['git', 'ls-tree', '-r', '--name-only', head], text=True).splitlines()
           else:
               paths = subprocess.check_output(['git', 'diff', '--name-only', base, head], text=True).splitlines()
-          patterns = {'go': 'go/', 'rust': 'rust/', 'protocol': 'protocol/',
+          patterns = {'go': 'go/', 'rust': 'rust/', 'python': 'python/', 'protocol': 'protocol/',
                       'workflows': '.github/workflows/', 'scripts': 'scripts/'}
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               for key, prefix in patterns.items():
@@ -62,6 +63,7 @@ jobs:
               for key, filename in {'goreleaser': '.goreleaser.yml', 'makefile': 'Makefile', 'changelog': 'CHANGELOG.md'}.items():
                   output.write(f"{key}={str(filename in paths).lower()}\n")
           PYCODE
+
 
   golangci:
     name: Go lint
@@ -111,12 +113,35 @@ jobs:
         working-directory: go
         run: go test -count=1 ./...
 
+  python-test:
+    name: Python worker SDK
+    needs: changes
+    if: |
+      needs.changes.outputs.python == 'true' ||
+      needs.changes.outputs.protocol == 'true' ||
+      needs.changes.outputs.workflows == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install and test
+        working-directory: python
+        run: |
+          python -m pip install -e ".[dev]"
+          FORGE_WORKER_TEST=1 pytest -q
+
   forge-go-integration:
     name: Protocol spec, Rust SDK, Go integration
     needs: changes
     if: |
       needs.changes.outputs.go == 'true' ||
       needs.changes.outputs.rust == 'true' ||
+      needs.changes.outputs.python == 'true' ||
       needs.changes.outputs.protocol == 'true' ||
       needs.changes.outputs.workflows == 'true' ||
       needs.changes.outputs.scripts == 'true' ||
@@ -136,6 +161,11 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Protocol spec matches fixtures and go doc
         run: python3 protocol/tools/gen_spec.py --check
@@ -192,7 +222,7 @@ jobs:
 
   ci:
     name: CI
-    needs: [changes, golangci, go-test, forge-go-integration, forge-rust-windows]
+    needs: [changes, golangci, go-test, python-test, forge-go-integration, forge-rust-windows]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -200,6 +230,7 @@ jobs:
         env:
           GOLANGCI: ${{ needs.golangci.result }}
           GOTEST: ${{ needs.go-test.result }}
+          PYTHON: ${{ needs.python-test.result }}
           LINUX: ${{ needs.forge-go-integration.result }}
           WINDOWS: ${{ needs.forge-rust-windows.result }}
         run: |
@@ -215,6 +246,7 @@ jobs:
           }
           ok golangci "$GOLANGCI"
           ok go-test "$GOTEST"
+          ok python-test "$PYTHON"
           ok forge-go-integration "$LINUX"
           ok forge-rust-windows "$WINDOWS"
           echo "All required CI jobs succeeded or were skipped appropriately."
