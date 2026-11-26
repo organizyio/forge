@@ -116,13 +116,19 @@ def _handle_socket(
     conn: socket.socket, dispatcher: BaseDispatcher, encoding: Encoding
 ) -> None:
     write_lock = threading.Lock()
+    disconnected = threading.Event()
     buf = bytearray()
 
     def send_frame(kind: int, obj: dict) -> None:
         payload = marshal(encoding, obj)
         data = encode_frame(kind, payload)
         with write_lock:
-            conn.sendall(data)
+            if disconnected.is_set():
+                return
+            try:
+                conn.sendall(data)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                disconnected.set()
 
     def event_sink(ev: WireEvent) -> None:
         send_frame(KIND_EVENT, ev.to_dict())
@@ -157,7 +163,10 @@ def _handle_socket(
     except OSError:
         pass
     finally:
+        disconnected.set()
         try:
-            conn.close()
+            conn.shutdown(socket.SHUT_RDWR)
         except OSError:
             pass
+        with write_lock:
+            conn.close()
